@@ -1,0 +1,71 @@
+schema_version: "1.2"
+id: DEMO-3
+sequence: 3
+title: Add a value_range function to calc.stats
+description: >
+  Add value_range(values) to calc.stats, using calc.core.subtract from DEMO-1,
+  in the module DEMO-2 created.
+type: feature
+
+goal:
+  problem: >
+    Callers cannot get the spread of a list of numbers from the calc package
+    without computing max and min themselves.
+  outcome: >
+    calc.stats.value_range(values) returns the largest value minus the smallest.
+
+scope:
+  in:
+    - A value_range function in calc/stats.py
+    - A unit test module for value_range
+  out:
+    - Changes to mean
+    - Changes to calc/core.py
+  affected_paths:
+    - calc/stats.py
+    - tests/test_range.py
+  protected_paths:
+    - calc/core.py
+
+technical:
+  stack:
+    - {kind: language, name: python, version: ">=3.10"}
+    - {kind: tool, name: pytest}
+  target:
+    environment: local
+  interfaces:
+    - kind: function
+      name: calc.stats.value_range
+      signature: "(values: list[float]) -> float"
+      action: create
+  commands:
+    test: python -m pytest -q
+
+acceptance_criteria:
+  - id: AC-1
+    given: the list [3, 10, 7]
+    when: value_range is called on it
+    then: it returns 7
+    verification:
+      method: new_test
+      reference: tests/test_range.py::test_value_range
+  - id: AC-2
+    given: the mean tests from DEMO-2
+    when: they run
+    then: they all pass
+    verification:
+      method: existing_test
+      reference: tests/test_stats.py
+
+size:
+  estimate: XS
+  rationale: One function added to an existing module, and one test.
+  files_estimate: 2
+
+risk:
+  level: low
+
+dependencies:
+  blocked_by: [DEMO-1, DEMO-2]
+
+open_questions: []

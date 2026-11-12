@@ -53,6 +53,8 @@ MAX_SIZE: str
 MAX_CRITERIA: int
 MAX_AFFECTED_PATHS: int
 MAX_FILES_ESTIMATE: int
+MAX_COMPONENTS: int
+MAX_INTERFACES: int
 
 AUTOMATED_METHODS = {"new_test", "existing_test", "static_check"}
 
@@ -134,6 +136,7 @@ def resolve(root: Path, value: str) -> Path:
 def apply_config(config: dict, root: Path) -> None:
     """Set the module-level paths and limits. Missing keys are an error, not a silent default."""
     global SCHEMA_PATH, MAX_SIZE, MAX_CRITERIA, MAX_AFFECTED_PATHS, MAX_FILES_ESTIMATE
+    global MAX_COMPONENTS, MAX_INTERFACES
     try:
         paths, gate = config["paths"], config["gate"]
         SCHEMA_PATH = resolve(root, paths["schema"])
@@ -141,6 +144,8 @@ def apply_config(config: dict, root: Path) -> None:
         MAX_CRITERIA = int(gate["max_acceptance_criteria"])
         MAX_AFFECTED_PATHS = int(gate["max_affected_paths"])
         MAX_FILES_ESTIMATE = int(gate["max_files_estimate"])
+        MAX_COMPONENTS = int(gate["max_components"])
+        MAX_INTERFACES = int(gate["max_interfaces"])
     except (KeyError, TypeError) as exc:
         raise ValueError(f"config is missing or has a malformed key: {exc}") from exc
     if MAX_SIZE not in SIZE_ORDER:
@@ -207,6 +212,14 @@ def check_size(ticket: dict, report: Report) -> None:
     if len(paths) > MAX_AFFECTED_PATHS:
         report.decompose.append(f"{len(paths)} affected paths exceeds {MAX_AFFECTED_PATHS}")
 
+    technical = ticket.get("technical") or {}
+    components = technical.get("components") or []
+    if len(components) > MAX_COMPONENTS:
+        report.decompose.append(f"{len(components)} infrastructure components exceeds {MAX_COMPONENTS}")
+    interfaces = technical.get("interfaces") or []
+    if len(interfaces) > MAX_INTERFACES:
+        report.decompose.append(f"{len(interfaces)} interfaces exceeds {MAX_INTERFACES}")
+
 
 def check_content(ticket: dict, report: Report) -> None:
     for path, text in walk_strings(ticket):
@@ -263,6 +276,38 @@ def check_content(ticket: dict, report: Report) -> None:
         report.warnings.append("high risk: routes to human approval before merge")
 
 
+def check_technical(ticket: dict, report: Report) -> None:
+    technical = ticket.get("technical")
+    if not isinstance(technical, dict):
+        return  # the schema already reports it missing
+    approval = bool((ticket.get("risk") or {}).get("human_approval_required"))
+    kinds = {s.get("kind") for s in technical.get("stack") or [] if isinstance(s, dict)}
+    commands = technical.get("commands") or {}
+    criteria = [c for c in ticket.get("acceptance_criteria") or [] if isinstance(c, dict)]
+    methods = {(c.get("verification") or {}).get("method") for c in criteria}
+
+    for comp in technical.get("components") or []:
+        if isinstance(comp, dict) and comp.get("action") == "delete" and not approval:
+            report.needs_info.append(
+                f"component {comp.get('name')!r} is deleted: requires risk.human_approval_required: true"
+            )
+
+    for iface in technical.get("interfaces") or []:
+        if isinstance(iface, dict) and iface.get("action") == "remove":
+            report.warnings.append(
+                f"interface {iface.get('name')!r} is removed: check for callers outside affected_paths"
+            )
+
+    if "iac" in kinds and kinds & {"language", "framework"}:
+        report.decompose.append("stack mixes infrastructure-as-code with application code: split into separate tickets")
+
+    if "iac" in kinds and not ({"plan", "validate"} & set(commands)) and "static_check" not in methods:
+        report.warnings.append("infrastructure change has no plan or validate command and no static_check criterion")
+
+    if methods & {"new_test", "existing_test"} and "test" not in commands:
+        report.warnings.append("criteria rely on tests but technical.commands has no 'test' command")
+
+
 def check_repo(ticket: dict, repo: Path, report: Report) -> None:
     """Every affected path must match a file, or sit in an existing directory (new file)."""
     for pattern in (ticket.get("scope") or {}).get("affected_paths") or []:
@@ -286,6 +331,7 @@ def check_ticket(ticket: dict, repo: Path | None) -> Report:
     check_schema(ticket, report)
     check_size(ticket, report)
     check_content(ticket, report)
+    check_technical(ticket, report)
     if repo:
         check_repo(ticket, repo, report)
     return report

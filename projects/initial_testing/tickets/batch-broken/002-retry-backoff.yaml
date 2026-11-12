@@ -1,4 +1,4 @@
-schema_version: "1.1"
+schema_version: "1.2"
 id: PAY-412
 sequence: 2
 title: Retry failed webhook deliveries with exponential backoff
@@ -36,6 +36,31 @@ scope:
     - tests/webhooks/
   protected_paths:
     - src/webhooks/signing.py
+
+technical:
+  stack:
+    - {kind: language, name: python, version: ">=3.11"}
+    - {kind: tool, name: pytest}
+  target:
+    environment: container
+  components:
+    - {type: postgres_table, name: webhook_dead_letters, action: modify}
+  interfaces:
+    - kind: function
+      name: webhooks.delivery.backoff_schedule
+      signature: "(base_seconds: int, max_attempts: int) -> list[float]"
+      action: create
+    - kind: function
+      name: webhooks.delivery.handle_failure
+      action: modify
+  commands:
+    test: pytest tests/webhooks
+    lint: ruff check src/webhooks
+  constraints:
+    - category: compatibility
+      statement: The webhook payload and signature headers must not change.
+    - category: dependency
+      statement: No new third-party packages; use the existing task scheduler.
 
 acceptance_criteria:
   - id: AC-1
@@ -75,12 +100,6 @@ acceptance_criteria:
     verification:
       method: existing_test
       reference: tests/webhooks/
-
-constraints:
-  - category: compatibility
-    statement: The webhook payload and signature headers must not change.
-  - category: dependency
-    statement: No new third-party packages; use the existing task scheduler.
 
 size:
   estimate: M

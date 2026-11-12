@@ -1,8 +1,8 @@
-# Factory ticket template (schema 1.1)
+# Factory ticket template (schema 1.2)
 # Copy into a ticket directory, rename it (e.g. 004-short-name.yaml) and replace
 # every TODO. The gate rejects any ticket that still contains TODO.
 
-schema_version: "1.1"
+schema_version: "1.2"
 id: TODO-1        # Stable identity, e.g. PAY-412. Never changes once assigned.
 sequence: 1       # Processing order in this directory, from 1. Unique per directory.
 title: "TODO: imperative, one outcome, 10-80 characters"
@@ -30,6 +30,32 @@ scope:
     - "TODO: files, directories or globs the change may touch"
   protected_paths: []   # paths the change must not touch
 
+technical:
+  stack:               # at least one; kind: language | framework | library | iac |
+                       #   database | query_language | runtime | tool
+    - {kind: language, name: "TODO: e.g. python", version: "TODO: e.g. >=3.11"}
+  target:
+    environment: local # local | container | aws | gcp | azure | on_prem | other
+    # region: eu-west-2      # required for aws, gcp and azure
+    # account: dev           # account alias or profile, never credentials
+  components: []       # infrastructure touched (max 6), e.g.
+                       # - {type: aws_neptune_cluster, name: graph-dev, action: create}
+                       # action: create | modify | delete | read (delete needs approval)
+  interfaces: []       # code surfaces touched (max 8), e.g.
+                       # - kind: function       # function | method | class | module | cli |
+                       #                        # http_endpoint | event | query | metric | schema
+                       #   name: pkg.module.func
+                       #   signature: "(x: int) -> str"
+                       #   action: create       # create | modify | remove
+  commands:            # what the factory runs to check the work, e.g.
+    test: "TODO: e.g. pytest tests/"
+                       # lint: ruff check .
+                       # validate: terraform validate
+                       # plan: terraform plan -out=tfplan
+  constraints: []      # e.g. - {category: compatibility, statement: "..."}
+                       # categories: performance, security, compatibility, dependency,
+                       # data, infrastructure, cost, style, other
+
 acceptance_criteria:   # 1-7 criteria; more means the ticket should be split
   - id: AC-1
     given: "TODO: starting state"
@@ -38,10 +64,6 @@ acceptance_criteria:   # 1-7 criteria; more means the ticket should be split
     verification:
       method: new_test # new_test | existing_test | static_check | manual
       reference: "TODO: test id, path or command"
-
-constraints: []        # e.g. - {category: compatibility, statement: "..."}
-                       # categories: performance, security, compatibility,
-                       # dependency, data, style, other
 
 size:
   estimate: S          # XS | S | M  (L and XL are rejected: decompose)

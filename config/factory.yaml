@@ -5,6 +5,7 @@ paths:
   schema: schema/ticket.schema.json
   ticket_template: schema/ticket.template.yaml
   projects: projects
+  worktrees: work/worktrees     # one git worktree per batch run
 
 # Definition-of-Ready gate limits. Anything over these goes back for decomposition.
 gate:
@@ -12,3 +13,27 @@ gate:
   max_acceptance_criteria: 7
   max_affected_paths: 8
   max_files_estimate: 15
+  max_components: 6            # technical.components
+  max_interfaces: 8            # technical.interfaces
+
+# Batch runner.
+runner:
+  builder: fixture             # noop | fixture  (the AI builder comes later)
+  max_attempts: 3              # per ticket; a ticket that fails them all stops the batch
+  command_timeout_seconds: 600
+  branch_prefix: factory       # branches are <prefix>/<batch>/<timestamp>
+  commit_name: Factory
+  commit_email: factory@localhost
+  # How a test reference without spaces (a path or pytest node id) is run.
+  test_reference_command: "{python} -m pytest -q {ref}"
+  # Regexes. A ticket command or criterion reference that matches is never run.
+  forbidden_commands:
+    - '\bterraform\b.*\b(apply|destroy|import)\b'
+    - '\bkubectl\b.*\b(apply|delete|create|replace)\b'
+    - '\baws\s+\S+\s+(create|delete|put|update|terminate|run)-'
+  # Commands run without cloud credentials: these are removed or overridden.
+  strip_env_prefixes: [AWS_, GOOGLE_, AZURE_, ARM_]
+  set_env:
+    AWS_SHARED_CREDENTIALS_FILE: /dev/null
+    AWS_CONFIG_FILE: /dev/null
+    AWS_EC2_METADATA_DISABLED: "true"

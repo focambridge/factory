@@ -1,2 +1,3 @@
 PyYAML>=6.0,<7
 jsonschema>=4.0,<5
+pytest>=7  # default test_reference_command and the demo project

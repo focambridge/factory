@@ -1,4 +1,4 @@
-schema_version: "1.1"
+schema_version: "1.2"
 id: PAY-413
 sequence: 3
 title: Expose the dead-letter count as a metrics gauge
@@ -23,6 +23,19 @@ scope:
   affected_paths:
     - src/webhooks/metrics.py
     - tests/webhooks/
+
+technical:
+  stack:
+    - {kind: language, name: python, version: ">=3.11"}
+    - {kind: library, name: prometheus_client}
+  target:
+    environment: container
+  components:
+    - {type: postgres_table, name: webhook_dead_letters, action: read}
+  interfaces:
+    - {kind: metric, name: webhook_dead_letter_count, action: create}
+  commands:
+    test: pytest tests/webhooks
 
 acceptance_criteria:
   - id: AC-1

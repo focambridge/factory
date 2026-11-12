@@ -1,0 +1,5 @@
+# Runner settings for this project. Relative paths resolve against this directory.
+name: demo
+workspace: ../../work/demo-workspace   # the git repo the tickets change; create it with setup_workspace.sh
+base_branch: main
+fixtures: fixtures                      # prepared changes for the fixture builder

@@ -1,0 +1,68 @@
+schema_version: "1.2"
+id: DEMO-1
+sequence: 1
+title: Add a subtract function to the calc module
+description: >
+  Add subtract(a, b) to calc.core alongside add, with a unit test.
+type: feature
+
+goal:
+  problem: >
+    The calc module can only add, so callers that need a difference write
+    their own arithmetic inline.
+  outcome: >
+    calc.core.subtract(a, b) returns a minus b.
+
+scope:
+  in:
+    - A subtract function in calc/core.py
+    - A unit test module for subtract
+  out:
+    - Changes to add
+    - Multiplication or division
+  affected_paths:
+    - calc/core.py
+    - tests/test_subtract.py
+
+technical:
+  stack:
+    - {kind: language, name: python, version: ">=3.10"}
+    - {kind: tool, name: pytest}
+  target:
+    environment: local
+  interfaces:
+    - kind: function
+      name: calc.core.subtract
+      signature: "(a: float, b: float) -> float"
+      action: create
+  commands:
+    test: python -m pytest -q
+
+acceptance_criteria:
+  - id: AC-1
+    given: the numbers 10 and 4
+    when: subtract(10, 4) is called
+    then: it returns 6
+    verification:
+      method: new_test
+      reference: tests/test_subtract.py::test_subtract
+  - id: AC-2
+    given: the existing test suite
+    when: it runs
+    then: every existing test passes
+    verification:
+      method: existing_test
+      reference: tests/test_core.py
+
+size:
+  estimate: XS
+  rationale: One function and one test module.
+  files_estimate: 2
+
+risk:
+  level: low
+
+dependencies:
+  blocked_by: []
+
+open_questions: []
