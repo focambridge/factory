@@ -1,0 +1,14 @@
+# Factory configuration.
+# Relative paths resolve against the factory root (the directory that holds config/).
+
+paths:
+  schema: schema/ticket.schema.json
+  ticket_template: schema/ticket.template.yaml
+  projects: projects
+
+# Definition-of-Ready gate limits. Anything over these goes back for decomposition.
+gate:
+  max_size: M                  # XS | S | M | L | XL
+  max_acceptance_criteria: 7
+  max_affected_paths: 8
+  max_files_estimate: 15

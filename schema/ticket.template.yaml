@@ -1,0 +1,70 @@
+# Factory ticket template (schema 1.1)
+# Copy into a ticket directory, rename it (e.g. 004-short-name.yaml) and replace
+# every TODO. The gate rejects any ticket that still contains TODO.
+
+schema_version: "1.1"
+id: TODO-1        # Stable identity, e.g. PAY-412. Never changes once assigned.
+sequence: 1       # Processing order in this directory, from 1. Unique per directory.
+title: "TODO: imperative, one outcome, 10-80 characters"
+description: >
+  TODO: a short plain-language summary of the work, for humans skimming the batch.
+type: feature     # feature | bug | refactor | chore | test | docs
+
+goal:
+  problem: >
+    TODO: what is wrong or missing today, and for whom (30+ characters).
+  outcome: >
+    TODO: what is true once this is done. Behaviour, not implementation.
+
+context:          # optional
+  parent: TODO-0  # parent epic or ticket id; delete if none
+  links: []
+  notes: ""
+
+scope:
+  in:
+    - "TODO: each piece of work included"
+  out:
+    - "TODO: tempting adjacent work that is NOT included (at least one)"
+  affected_paths:
+    - "TODO: files, directories or globs the change may touch"
+  protected_paths: []   # paths the change must not touch
+
+acceptance_criteria:   # 1-7 criteria; more means the ticket should be split
+  - id: AC-1
+    given: "TODO: starting state"
+    when: "TODO: action or event"
+    then: "TODO: observable result with concrete values"
+    verification:
+      method: new_test # new_test | existing_test | static_check | manual
+      reference: "TODO: test id, path or command"
+
+constraints: []        # e.g. - {category: compatibility, statement: "..."}
+                       # categories: performance, security, compatibility,
+                       # dependency, data, style, other
+
+size:
+  estimate: S          # XS | S | M  (L and XL are rejected: decompose)
+  rationale: "TODO: why this size"
+  files_estimate: 1
+
+risk:
+  level: low           # low | medium | high (high needs notes and approval)
+  notes: ""
+  human_approval_required: false
+
+dependencies:
+  blocked_by: []       # ids of tickets that must be done first
+
+# reproduction:        # required when type is bug
+#   steps: ["..."]
+#   expected: "..."
+#   actual: "..."
+#   environment: "..."
+
+open_questions: []     # must be empty before the ticket is READY
+
+provenance:            # optional
+  author: ""
+  created: 2026-01-01
+  source: ""

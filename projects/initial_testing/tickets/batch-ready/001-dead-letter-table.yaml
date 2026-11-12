@@ -1,0 +1,67 @@
+schema_version: "1.1"
+id: PAY-410
+sequence: 1
+title: Add a dead-letter table for failed webhook deliveries
+description: >
+  Create the table and model that will hold webhook deliveries which have
+  exhausted their retries, so later tickets can write to it and report on it.
+type: feature
+
+goal:
+  problem: >
+    There is nowhere to record webhook deliveries that fail permanently, so
+    they are lost and cannot be inspected or replayed.
+  outcome: >
+    A webhook_dead_letters table and model exist, ready for the retry worker
+    to write to.
+
+context:
+  parent: PAY-400
+
+scope:
+  in:
+    - An additive migration creating webhook_dead_letters
+    - A WebhookDeadLetter model with delivery id, last status code, attempt count and timestamp
+  out:
+    - Writing rows to the table (PAY-412)
+    - Any replay mechanism (PAY-415)
+    - Changes to existing webhook tables
+  affected_paths:
+    - src/webhooks/models.py
+    - migrations/
+    - tests/webhooks/
+
+acceptance_criteria:
+  - id: AC-1
+    given: a database at the current schema version
+    when: migrations are applied
+    then: >
+      the webhook_dead_letters table exists with columns delivery_id,
+      last_status_code, attempt_count and created_at
+    verification:
+      method: new_test
+      reference: tests/webhooks/test_models.py::test_dead_letter_table_exists
+  - id: AC-2
+    given: a database with the new migration applied
+    when: the migration is reversed
+    then: the webhook_dead_letters table no longer exists and no other table has changed
+    verification:
+      method: new_test
+      reference: tests/webhooks/test_models.py::test_dead_letter_migration_reverses
+
+constraints:
+  - category: data
+    statement: The migration must be additive and reversible.
+
+size:
+  estimate: S
+  rationale: One model, one additive migration and one new test module.
+  files_estimate: 3
+
+risk:
+  level: low
+
+dependencies:
+  blocked_by: []
+
+open_questions: []

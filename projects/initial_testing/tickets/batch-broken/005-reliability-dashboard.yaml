@@ -1,0 +1,54 @@
+schema_version: "1.1"
+id: PAY-399
+sequence: 5
+title: Improve webhook reliability and add a replay dashboard
+description: Make webhooks better.
+type: feature
+
+goal:
+  problem: Webhooks are unreliable and merchants complain about missed events.
+  outcome: Webhooks work properly and operators can replay failures.
+
+scope:
+  in:
+    - Retries
+    - Replay dashboard
+    - Better monitoring
+  out: []
+  affected_paths:
+    - src/webhooks/
+    - src/dashboard/
+    - src/monitoring/
+
+acceptance_criteria:
+  - id: AC-1
+    given: a failed delivery
+    when: it fails
+    then: it is retried as appropriate
+    verification:
+      method: new_test
+  - id: AC-2
+    given: an operator on the dashboard
+    when: they open the failures view
+    then: they can replay deliveries, filter by merchant etc.
+    verification:
+      method: manual
+  - id: AC-3
+    given: the existing tests
+    when: they run
+    then: they pass
+    verification:
+      method: existing_test
+
+size:
+  estimate: L
+  rationale: TBD
+
+risk:
+  level: medium
+
+dependencies:
+  blocked_by: [PAY-999]
+
+open_questions:
+  - Which status codes count as transient?

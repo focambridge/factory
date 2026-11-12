@@ -1,0 +1,389 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/schemas/factory-ticket/1.1",
+  "title": "Factory ticket",
+  "description": "A unit of work for an agentic software factory. This schema is the structural contract only; content and size rules live in dor_check.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "sequence",
+    "title",
+    "description",
+    "type",
+    "goal",
+    "scope",
+    "acceptance_criteria",
+    "size",
+    "risk"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.1"
+    },
+    "id": {
+      "$ref": "#/$defs/ticket_id"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Processing order within the ticket directory, starting at 1. Unique per directory. Unlike id, it may be renumbered."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 80,
+      "description": "Imperative, one outcome: 'Retry failed webhook deliveries with backoff'."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 20,
+      "description": "Plain-language summary of the work, for humans skimming a batch."
+    },
+    "type": {
+      "enum": [
+        "feature",
+        "bug",
+        "refactor",
+        "chore",
+        "test",
+        "docs"
+      ]
+    },
+    "goal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "problem",
+        "outcome"
+      ],
+      "properties": {
+        "problem": {
+          "type": "string",
+          "minLength": 30,
+          "description": "What is wrong or missing today, and for whom."
+        },
+        "outcome": {
+          "type": "string",
+          "minLength": 20,
+          "description": "What is true once this ticket is done. Behaviour, not implementation."
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "parent": {
+          "$ref": "#/$defs/ticket_id"
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "in",
+        "out",
+        "affected_paths"
+      ],
+      "properties": {
+        "in": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 5
+          }
+        },
+        "out": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 5
+          },
+          "description": "Explicit non-goals, especially tempting adjacent work. Mandatory."
+        },
+        "affected_paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Files, directories or globs the change may touch. Bounds the blast radius."
+        },
+        "protected_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Paths the change must not touch."
+        }
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/criterion"
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "category",
+          "statement"
+        ],
+        "properties": {
+          "category": {
+            "enum": [
+              "performance",
+              "security",
+              "compatibility",
+              "dependency",
+              "data",
+              "style",
+              "other"
+            ]
+          },
+          "statement": {
+            "type": "string",
+            "minLength": 10
+          }
+        }
+      }
+    },
+    "size": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "estimate",
+        "rationale"
+      ],
+      "properties": {
+        "estimate": {
+          "enum": [
+            "XS",
+            "S",
+            "M",
+            "L",
+            "XL"
+          ]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 10
+        },
+        "files_estimate": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "level"
+      ],
+      "properties": {
+        "level": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "notes": {
+          "type": "string"
+        },
+        "human_approval_required": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "blocked_by": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ticket_id"
+          }
+        }
+      }
+    },
+    "reproduction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "steps",
+        "expected",
+        "actual"
+      ],
+      "properties": {
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected": {
+          "type": "string",
+          "minLength": 5
+        },
+        "actual": {
+          "type": "string",
+          "minLength": 5
+        },
+        "environment": {
+          "type": "string"
+        }
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string",
+          "format": "date"
+        },
+        "source": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "bug"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "reproduction"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "risk": {
+            "properties": {
+              "level": {
+                "const": "high"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "risk": {
+            "required": [
+              "notes",
+              "human_approval_required"
+            ],
+            "properties": {
+              "human_approval_required": {
+                "const": true
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "ticket_id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9]+-[0-9]+$"
+    },
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "given",
+        "when",
+        "then",
+        "verification"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^AC-[0-9]+$"
+        },
+        "given": {
+          "type": "string",
+          "minLength": 5
+        },
+        "when": {
+          "type": "string",
+          "minLength": 5
+        },
+        "then": {
+          "type": "string",
+          "minLength": 5,
+          "description": "Observable result. Concrete values, no adjectives."
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method"
+          ],
+          "properties": {
+            "method": {
+              "enum": [
+                "new_test",
+                "existing_test",
+                "static_check",
+                "manual"
+              ]
+            },
+            "reference": {
+              "type": "string",
+              "description": "Test id, path or command that proves the criterion."
+            }
+          }
+        }
+      }
+    }
+  }
+}
