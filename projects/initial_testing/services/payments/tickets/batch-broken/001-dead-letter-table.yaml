@@ -1,5 +1,5 @@
 schema_version: "1.2"
-id: PAY-410
+id: PAY-510
 sequence: 3
 title: Add a dead-letter table for failed webhook deliveries
 description: >
@@ -23,7 +23,7 @@ scope:
     - An additive migration creating webhook_dead_letters
     - A WebhookDeadLetter model with delivery id, last status code, attempt count and timestamp
   out:
-    - Writing rows to the table (PAY-412)
+    - Writing rows to the table (PAY-512)
     - Any replay mechanism (PAY-415)
     - Changes to existing webhook tables
   affected_paths:

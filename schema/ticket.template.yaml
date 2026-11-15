@@ -1,6 +1,7 @@
 # Factory ticket template (schema 1.2)
-# Copy into a ticket directory, rename it (e.g. 004-short-name.yaml) and replace
-# every TODO. The gate rejects any ticket that still contains TODO.
+# Copy into a batch directory, projects/<project>/<services|integrations>/<unit>/tickets/<batch>/,
+# rename it (e.g. 004-short-name.yaml) and replace every TODO. The gate rejects
+# any ticket that still contains TODO. Ids must be unique across the project.
 
 schema_version: "1.2"
 id: TODO-1        # Stable identity, e.g. PAY-412. Never changes once assigned.
@@ -26,11 +27,12 @@ scope:
     - "TODO: each piece of work included"
   out:
     - "TODO: tempting adjacent work that is NOT included (at least one)"
-  affected_paths:
+  affected_paths:       # relative to the unit folder; the change cannot leave the unit
     - "TODO: files, directories or globs the change may touch"
   protected_paths: []   # paths the change must not touch
 
-technical:
+technical:            # stack, target and commands can be left out when the unit's
+                      # unit.yaml defaults cover them; the ticket's own values win
   stack:               # at least one; kind: language | framework | library | iac |
                        #   database | query_language | runtime | tool
     - {kind: language, name: "TODO: e.g. python", version: "TODO: e.g. >=3.11"}
@@ -76,7 +78,8 @@ risk:
   human_approval_required: false
 
 dependencies:
-  blocked_by: []       # ids of tickets that must be done first
+  blocked_by: []       # ids of tickets that must be done first: earlier in this batch,
+                       # or anywhere in the project and merged into the base branch
 
 # reproduction:        # required when type is bug
 #   steps: ["..."]

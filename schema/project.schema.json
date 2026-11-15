@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/schemas/factory-project/1.0",
+  "title": "Factory project",
+  "description": "projects/<project>/project.yaml. A project is one git repository made of units: services and integrations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "workspace"],
+  "properties": {
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+    "description": {"type": "string"},
+    "workspace": {"type": "string", "minLength": 1, "description": "The project's git repository. Relative paths resolve against the project folder."},
+    "base_branch": {"type": "string", "minLength": 1, "default": "main"},
+    "fixtures": {"type": "string", "minLength": 1, "description": "Prepared changes for the fixture builder: <fixtures>/<ticket-id>/."},
+    "platform": {"$ref": "#/$defs/platform", "description": "Default platform for integrations."},
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Optional build order. Units in a stage expect every earlier stage to be merged. Omit for a single unit or when order does not matter.",
+      "items": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/unit_name"}}
+    }
+  },
+  "$defs": {
+    "unit_name": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+    "platform": {"enum": ["none", "docker", "docker-compose", "kubernetes", "other"]}
+  }
+}

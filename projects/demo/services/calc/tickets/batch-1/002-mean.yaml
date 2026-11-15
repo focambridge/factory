@@ -28,11 +28,6 @@ scope:
     - calc/core.py
 
 technical:
-  stack:
-    - {kind: language, name: python, version: ">=3.10"}
-    - {kind: tool, name: pytest}
-  target:
-    environment: local
   interfaces:
     - kind: module
       name: calc.stats
@@ -41,8 +36,6 @@ technical:
       name: calc.stats.mean
       signature: "(values: list[float]) -> float"
       action: create
-  commands:
-    test: python -m pytest -q
 
 acceptance_criteria:
   - id: AC-1

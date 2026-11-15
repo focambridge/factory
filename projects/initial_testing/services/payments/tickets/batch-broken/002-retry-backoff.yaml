@@ -1,5 +1,5 @@
 schema_version: "1.2"
-id: PAY-412
+id: PAY-512
 sequence: 2
 title: Retry failed webhook deliveries with exponential backoff
 description: >
@@ -112,6 +112,6 @@ risk:
   human_approval_required: false
 
 dependencies:
-  blocked_by: [PAY-410]
+  blocked_by: [PAY-510]
 
 open_questions: []

@@ -1,0 +1,14 @@
+kind: service
+description: Totals baskets. Gets prices through an injected quote function, never by importing pricing.
+packaging: none
+defaults:
+  stack:
+    - {kind: language, name: python, version: ">=3.10"}
+    - {kind: tool, name: pytest}
+  target:
+    environment: local
+  commands:
+    test: python -m pytest -q
+contracts:
+  uses:
+    - {unit: pricing, contract: quote}

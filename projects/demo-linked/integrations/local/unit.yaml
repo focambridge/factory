@@ -1,0 +1,12 @@
+kind: integration
+description: Runs checkout against the real pricing service in one Python process.
+services: [pricing, checkout]
+platform: none        # a real system might use docker-compose or kubernetes here
+defaults:
+  stack:
+    - {kind: language, name: python, version: ">=3.10"}
+    - {kind: tool, name: pytest}
+  target:
+    environment: local
+  commands:
+    test: python -m pytest -q

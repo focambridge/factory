@@ -1,5 +1,8 @@
-# Runner settings for this project. Relative paths resolve against this directory.
+# The simplest shape: one service, no integration, no containers.
+# Relative paths resolve against this directory.
 name: demo
-workspace: ../../work/demo-workspace   # the git repo the tickets change; create it with setup_workspace.sh
+description: A single Python library, to show the smallest project and the retry and approval flow.
+workspace: ../../work/demo-workspace   # create it with setup_workspace.sh
 base_branch: main
 fixtures: fixtures                      # prepared changes for the fixture builder
+platform: none

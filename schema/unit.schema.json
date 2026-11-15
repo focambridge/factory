@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/schemas/factory-unit/1.0",
+  "title": "Factory unit",
+  "description": "services/<unit>/unit.yaml or integrations/<unit>/unit.yaml. The unit's name is its folder name.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind"],
+  "properties": {
+    "kind": {"enum": ["service", "integration"]},
+    "description": {"type": "string"},
+    "path": {"type": "string", "minLength": 1, "description": "The unit's folder in the repository. Default: the same relative folder as in the factory (services/<unit>). '.' means the repository root (single-unit projects only)."},
+    "packaging": {"enum": ["none", "docker"], "default": "none", "description": "docker: the unit is expected to have a Dockerfile in its folder."},
+    "platform": {"enum": ["none", "docker", "docker-compose", "kubernetes", "other"], "description": "Integrations only. Default: the project's platform."},
+    "services": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/unit_name"}, "description": "Integrations only: the services it connects."},
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Merged into every ticket's technical section. stack and target apply when the ticket has none; commands merge key by key, the ticket winning; constraints are added before the ticket's own.",
+      "properties": {
+        "stack": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+        "target": {"type": "object"},
+        "commands": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}},
+        "constraints": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provides": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "type", "path"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+              "type": {"enum": ["openapi", "asyncapi", "json-schema", "graphql", "protobuf", "sql", "other"]},
+              "path": {"type": "string", "minLength": 1, "description": "Relative to the unit folder."},
+              "description": {"type": "string"}
+            }
+          }
+        },
+        "uses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["unit", "contract"],
+            "properties": {
+              "unit": {"$ref": "#/$defs/unit_name"},
+              "contract": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"}
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"kind": {"const": "integration"}}}, "then": {"required": ["services"]}},
+    {"if": {"properties": {"kind": {"const": "service"}}}, "then": {"not": {"anyOf": [{"required": ["services"]}, {"required": ["platform"]}]}}}
+  ],
+  "$defs": {
+    "unit_name": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"}
+  }
+}

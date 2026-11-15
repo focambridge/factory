@@ -1,0 +1,11 @@
+kind: service
+description: A small Python arithmetic library.
+packaging: none
+defaults:                 # merged into every ticket in this unit
+  stack:
+    - {kind: language, name: python, version: ">=3.10"}
+    - {kind: tool, name: pytest}
+  target:
+    environment: local
+  commands:
+    test: python -m pytest -q

@@ -28,18 +28,11 @@ scope:
     - calc/core.py
 
 technical:
-  stack:
-    - {kind: language, name: python, version: ">=3.10"}
-    - {kind: tool, name: pytest}
-  target:
-    environment: local
   interfaces:
     - kind: function
       name: calc.stats.value_range
       signature: "(values: list[float]) -> float"
       action: create
-  commands:
-    test: python -m pytest -q
 
 acceptance_criteria:
   - id: AC-1

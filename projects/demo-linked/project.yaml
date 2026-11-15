@@ -1,0 +1,11 @@
+# Several linked units: two services connected by one integration.
+# Relative paths resolve against this directory.
+name: demo-linked
+description: Two services and an integration, to show contracts, stages and cross-unit dependencies.
+workspace: ../../work/demo-linked-workspace   # create it with setup_workspace.sh
+base_branch: main
+fixtures: fixtures
+platform: none        # default for integrations: none | docker | docker-compose | kubernetes | other
+stages:               # services first; the integration expects them merged
+  - [pricing, checkout]
+  - [local]

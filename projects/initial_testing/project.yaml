@@ -1,7 +1,11 @@
-# Runner settings for this project. Relative paths resolve against this directory.
-# The PAY and GRAPH tickets describe an imaginary codebase: point workspace at a
-# real git repo before running them.
+# Example tickets for an imaginary codebase. Point workspace at a real git repo
+# before running them. Relative paths resolve against this directory.
 name: initial_testing
+description: Payments webhooks plus a Neptune graph, used to exercise the gate.
 workspace: ../../work/initial-testing-workspace
 base_branch: main
 fixtures: fixtures
+platform: docker-compose
+stages:
+  - [payments, graph-infra]
+  - [graph-loader]

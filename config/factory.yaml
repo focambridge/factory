@@ -3,6 +3,8 @@
 
 paths:
   schema: schema/ticket.schema.json
+  project_schema: schema/project.schema.json
+  unit_schema: schema/unit.schema.json
   ticket_template: schema/ticket.template.yaml
   projects: projects
   worktrees: work/worktrees     # one git worktree per batch run
@@ -18,10 +20,10 @@ gate:
 
 # Batch runner.
 runner:
-  builder: fixture             # noop | fixture  (the AI builder comes later)
+  builder: claude              # claude | fixture | noop  (override with --builder)
   max_attempts: 3              # per ticket; a ticket that fails them all stops the batch
   command_timeout_seconds: 600
-  branch_prefix: factory       # branches are <prefix>/<batch>/<timestamp>
+  branch_prefix: factory       # branches are <prefix>/<unit>/<batch>/<timestamp>
   commit_name: Factory
   commit_email: factory@localhost
   # How a test reference without spaces (a path or pytest node id) is run.
@@ -31,9 +33,66 @@ runner:
     - '\bterraform\b.*\b(apply|destroy|import)\b'
     - '\bkubectl\b.*\b(apply|delete|create|replace)\b'
     - '\baws\s+\S+\s+(create|delete|put|update|terminate|run)-'
+  # Regexes that override forbidden_commands for one command segment. Each part
+  # of a chained command (&&, ||, ;, |) is checked on its own.
+  allowed_commands:
+    - '\bkubectl\b.*--context[= ](kind|k3d)-\S+'
   # Commands run without cloud credentials: these are removed or overridden.
-  strip_env_prefixes: [AWS_, GOOGLE_, AZURE_, ARM_]
+  # ANTHROPIC_ keeps your Claude API key away from project commands.
+  strip_env_prefixes: [AWS_, GOOGLE_, AZURE_, ARM_, ANTHROPIC_]
   set_env:
     AWS_SHARED_CREDENTIALS_FILE: /dev/null
     AWS_CONFIG_FILE: /dev/null
     AWS_EC2_METADATA_DISABLED: "true"
+
+# The claude builder: Claude Code run headless (`claude -p`) in the unit folder.
+builder:
+  auth: subscription           # subscription | api_key  (override with run_batch --auth)
+                               #   subscription: the Claude Code login on this machine
+                               #   api_key: an Anthropic API key; costs are reported per ticket
+  claude:
+    command: claude            # path to the Claude Code CLI
+    model: sonnet              # alias (sonnet, opus) or a full model id
+    max_turns: 40              # per attempt
+    timeout_seconds: 1200      # per attempt
+    max_cost_usd_per_ticket: 5.00   # no more attempts once spent, whenever Claude Code reports a cost
+    api_key_env: ANTHROPIC_API_KEY  # where the key is read from in api_key mode
+    api_key_keychain_service: ""    # optional macOS Keychain item holding the key instead,
+                                    # e.g. created with: security add-generic-password -s anthropic-api-key -a $USER -w
+    # Headless Claude Code cannot ask permission, so anything not allowed here is denied.
+    # The ticket's own technical.commands are always allowed as well.
+    allowed_tools:
+      - Read
+      - Edit
+      - MultiEdit
+      - Write
+      - Glob
+      - Grep
+      - LS
+      - "Bash(ls:*)"
+      - "Bash(cat:*)"
+      - "Bash(mkdir:*)"
+      - "Bash(python -m pytest:*)"
+      - "Bash(pytest:*)"
+      - "Bash(npm install:*)"
+      - "Bash(npm ci:*)"
+      - "Bash(npm test:*)"
+      - "Bash(npm run:*)"
+      - "Bash(npx tsc:*)"
+      - "Bash(terraform fmt:*)"
+      - "Bash(terraform init -backend=false:*)"
+      - "Bash(terraform validate:*)"
+      - "Bash(terraform test:*)"
+    disallowed_tools:
+      - "Bash(terraform apply:*)"
+      - "Bash(terraform destroy:*)"
+      - "Bash(terraform import:*)"
+      - "Bash(kubectl apply:*)"
+      - "Bash(kubectl delete:*)"
+      - "Bash(git commit:*)"
+      - "Bash(git push:*)"
+      - "Bash(git reset:*)"
+      - "Bash(git checkout:*)"
+      - "Bash(rm -rf:*)"
+      - WebFetch
+      - WebSearch

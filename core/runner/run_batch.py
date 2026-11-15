@@ -1,31 +1,35 @@
 #!/usr/bin/env python3
-"""Batch runner: validate a ticket directory, then build its tickets in order.
+"""Batch runner: validate a unit's ticket batch, then build its tickets in order.
 
 Usage:
-    python core/runner/run_batch.py projects/<project>/tickets/<batch> [--builder NAME]
-    python core/runner/run_batch.py projects/<project>/tickets/<batch> --resume RUN_ID [--approve TICKET-ID ...]
+    python core/runner/run_batch.py projects/<project>/<services|integrations>/<unit>/tickets/<batch>
+        [--builder claude|fixture|noop] [--auth subscription|api_key] [--max-attempts N]
+    python core/runner/run_batch.py <batch> --resume RUN_ID [--approve TICKET-ID ...]
+
+A project is one git repository (project.yaml names it) made of units:
+services and integrations. Each unit has its own folder in the repository and
+its own ticket batches. Ticket paths are relative to the unit folder.
 
 Workflow for one batch:
-  1. Run the Definition-of-Ready gate on the directory. If it is not READY,
-     nothing is processed.
-  2. Create a git worktree on a new branch from the project's base branch.
-     Each ticket builds on the commit the previous ticket left (shared workspace).
+  1. Run the Definition-of-Ready gate (including the project checks). If the
+     batch is not READY, nothing is processed.
+  2. Create a git worktree on a new branch, <prefix>/<unit>/<batch>/<timestamp>,
+     from the project's base branch. Each ticket builds on the commit the
+     previous ticket left.
   3. For each ticket, in sequence order, up to runner.max_attempts times:
      reset the worktree to the last good commit, run the builder, check the
-     changed files against affected_paths and protected_paths, run
-     technical.commands, and check each acceptance criterion through its
-     verification reference.
-  4. A passing ticket is committed. Its artifact is written to
-     <project>/artifacts/<ticket-id>/: report.json, changes.patch, ticket.yaml
-     and logs/. A ticket that fails every attempt stops the batch.
+     changed files stay inside the unit folder and its affected_paths (and out
+     of protected_paths), run technical.commands from the unit folder, and
+     check each acceptance criterion through its verification reference.
+  4. A passing ticket is committed (only the builder's changes), with
+     Factory-Ticket / Factory-Unit / Factory-Run trailers. Its artifact is
+     written to <project>/artifacts/<ticket-id>/. A ticket that fails every
+     attempt stops the batch.
   5. A ticket with risk.human_approval_required pauses the batch after its
      commit. Review it, then resume with --approve.
 
-The run record <project>/runs/<run-id>.json holds the gate result, a hash of
-each ticket at validation time, and each ticket's status, attempts and commit.
-A resumed run refuses to continue if any ticket file has changed.
-
-The project directory needs a project.yaml naming the workspace git repo.
+The factory never merges. A ticket counts as done for other batches once you
+merge its commit into the base branch.
 
 Exit codes: 0 completed, 1 rejected by the gate or a ticket failed,
 2 paused for approval, 3 error.
@@ -34,7 +38,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import fnmatch
 import hashlib
 import json
 import os
@@ -53,11 +56,13 @@ FACTORY_ROOT = Path(__file__).resolve().parents[2]
 if str(FACTORY_ROOT) not in sys.path:
     sys.path.insert(0, str(FACTORY_ROOT))
 
-from core.runner.builders import BUILDERS, BuildContext  # noqa: E402
+from core import project as proj  # noqa: E402
+from core.runner.builders import BUILDERS, BuildContext, BuilderError, make_builder  # noqa: E402
 from core.ticket_check import dor_check  # noqa: E402
 
 PASSING_CRITERIA = {"pass", "indirect", "manual"}
 LOG_TAIL_LINES = 40
+SEGMENTS = re.compile(r"&&|\|\||[;|\n]")
 
 
 class RunnerError(Exception):
@@ -98,7 +103,7 @@ def git(repo: Path, *args: str, strip: bool = True) -> str:
     return proc.stdout.strip() if strip else proc.stdout
 
 
-# ------------------------------------------------------- settings and project
+# ----------------------------------------------------------------- settings
 
 @dataclass
 class Settings:
@@ -111,6 +116,7 @@ class Settings:
     commit_email: str
     test_reference_command: str
     forbidden_commands: list
+    allowed_commands: list
     strip_env_prefixes: list
     set_env: dict
 
@@ -119,7 +125,7 @@ def load_settings(config: dict, root: Path) -> Settings:
     try:
         runner = config["runner"]
         return Settings(
-            worktrees=dor_check.resolve(root, config["paths"]["worktrees"]),
+            worktrees=proj.resolve(root, config["paths"]["worktrees"]),
             builder=str(runner["builder"]),
             max_attempts=int(runner["max_attempts"]),
             command_timeout=int(runner["command_timeout_seconds"]),
@@ -128,48 +134,12 @@ def load_settings(config: dict, root: Path) -> Settings:
             commit_email=str(runner["commit_email"]),
             test_reference_command=str(runner["test_reference_command"]),
             forbidden_commands=[re.compile(p) for p in runner.get("forbidden_commands") or []],
+            allowed_commands=[re.compile(p) for p in runner.get("allowed_commands") or []],
             strip_env_prefixes=[str(p) for p in runner.get("strip_env_prefixes") or []],
             set_env={str(k): str(v) for k, v in (runner.get("set_env") or {}).items()},
         )
     except (KeyError, TypeError, ValueError, re.error) as exc:
         raise RunnerError(f"config: runner settings missing or malformed: {exc}") from exc
-
-
-@dataclass
-class Project:
-    name: str
-    dir: Path
-    workspace: Path
-    base_branch: str
-    fixtures: Path
-
-    @property
-    def artifacts(self) -> Path:
-        return self.dir / "artifacts"
-
-    @property
-    def runs(self) -> Path:
-        return self.dir / "runs"
-
-
-def load_project(batch_dir: Path) -> Project:
-    if batch_dir.parent.name != "tickets":
-        raise RunnerError(f"{batch_dir} is not a batch: expected <project>/tickets/<batch>")
-    project_dir = batch_dir.parent.parent
-    path = project_dir / "project.yaml"
-    if not path.is_file():
-        raise RunnerError(f"{path} not found: it must name the workspace repository")
-    data = yaml.safe_load(path.read_text()) or {}
-    try:
-        return Project(
-            name=str(data.get("name") or project_dir.name),
-            dir=project_dir,
-            workspace=dor_check.resolve(project_dir, data["workspace"]).resolve(),
-            base_branch=str(data.get("base_branch") or "main"),
-            fixtures=dor_check.resolve(project_dir, data.get("fixtures") or "fixtures"),
-        )
-    except (KeyError, TypeError) as exc:
-        raise RunnerError(f"{path}: missing or malformed key {exc}") from exc
 
 
 # ------------------------------------------------------------ verification
@@ -183,18 +153,31 @@ def command_env(settings: Settings) -> dict:
     return env
 
 
+def policy_block(command: str, settings: Settings) -> str | None:
+    """The forbidden pattern a command breaks, checking each chained segment on its own."""
+    for segment in SEGMENTS.split(command):
+        segment = segment.strip()
+        if not segment:
+            continue
+        for pattern in settings.forbidden_commands:
+            if pattern.search(segment) and not any(a.search(segment) for a in settings.allowed_commands):
+                return pattern.pattern
+    return None
+
+
 def run_command(name: str, command: str, cwd: Path, log: Path, log_root: Path,
                 settings: Settings, cache: dict) -> dict:
-    """Run one shell command in the worktree. An identical command runs once per attempt."""
+    """Run one shell command. An identical command runs once per attempt."""
     if command in cache:
         return {**cache[command], "name": name}
     result = {"name": name, "command": command}
-    blocked = next((p.pattern for p in settings.forbidden_commands if p.search(command)), None)
+    blocked = policy_block(command, settings)
     if blocked:
         result.update(status="forbidden", exit_code=None, seconds=0, log=None,
                       detail=f"matches runner.forbidden_commands: {blocked}")
         cache[command] = result
         return result
+    cwd.mkdir(parents=True, exist_ok=True)
     start = time.monotonic()
     try:
         proc = subprocess.run(command, shell=True, cwd=cwd, env=command_env(settings),
@@ -204,23 +187,15 @@ def run_command(name: str, command: str, cwd: Path, log: Path, log_root: Path,
     except subprocess.TimeoutExpired as exc:
         code, out, err, status = None, as_text(exc.stdout), as_text(exc.stderr), "timeout"
     log.parent.mkdir(parents=True, exist_ok=True)
-    log.write_text(f"$ {command}\n\n--- stdout\n{out}\n--- stderr\n{err}\n--- exit {code}\n")
+    log.write_text(f"$ {command}\n(cwd {cwd})\n\n--- stdout\n{out}\n--- stderr\n{err}\n--- exit {code}\n")
     result.update(status=status, exit_code=code, seconds=round(time.monotonic() - start, 2),
                   log=str(log.relative_to(log_root)))
     cache[command] = result
     return result
 
 
-def path_matches(path: str, pattern: str) -> bool:
-    pattern = pattern.strip()
-    if pattern.endswith("/"):
-        return path.startswith(pattern)
-    if any(c in pattern for c in "*?["):
-        return fnmatch.fnmatchcase(path, pattern)
-    return path == pattern or path.startswith(pattern + "/")
-
-
-def check_scope(ticket: dict, worktree: Path) -> dict:
+def check_scope(ticket: dict, unit: proj.Unit, worktree: Path) -> dict:
+    """Stage the builder's changes and check they stay inside the unit and its scope."""
     git(worktree, "add", "-A")
     out = git(worktree, "diff", "--cached", "--name-only", "--no-renames", "-z", strip=False)
     changed = sorted(p for p in out.split("\0") if p)
@@ -228,10 +203,14 @@ def check_scope(ticket: dict, worktree: Path) -> dict:
     affected = [str(p) for p in scope.get("affected_paths") or []]
     protected = [str(p) for p in scope.get("protected_paths") or []]
     problems = [] if changed else ["the builder changed no files"]
-    problems += [f"{p} is outside affected_paths" for p in changed
-                 if not any(path_matches(p, a) for a in affected)]
-    problems += [f"{p} is a protected path" for p in changed
-                 if any(path_matches(p, x) for x in protected)]
+    for p in changed:
+        rel = unit.from_repo(p)
+        if rel is None:
+            problems.append(f"{p} is outside the unit folder {unit.path}/")
+        elif not any(proj.path_matches(rel, a) for a in affected):
+            problems.append(f"{p} is outside affected_paths")
+        elif any(proj.path_matches(rel, x) for x in protected):
+            problems.append(f"{p} is a protected path")
     return {"status": "fail" if problems else "pass", "changed": changed, "problems": problems}
 
 
@@ -246,7 +225,7 @@ def criterion_command(criterion: dict, settings: Settings) -> str | None:
     return settings.test_reference_command.format(python=shlex.quote(sys.executable), ref=shlex.quote(ref))
 
 
-def check_criteria(ticket: dict, worktree: Path, settings: Settings, log_dir: Path,
+def check_criteria(ticket: dict, cwd: Path, settings: Settings, log_dir: Path,
                    log_root: Path, cache: dict, commands: list) -> list:
     test_passed = any(c["name"] == "test" and c["status"] == "pass" for c in commands)
     results = []
@@ -262,7 +241,7 @@ def check_criteria(ticket: dict, worktree: Path, settings: Settings, log_dir: Pa
                 entry.update(status="indirect" if test_passed else "fail",
                              detail="no reference: relies on the 'test' command")
             else:
-                r = run_command(cid, command, worktree, log_dir / f"{cid}.log", log_root, settings, cache)
+                r = run_command(cid, command, cwd, log_dir / f"{cid}.log", log_root, settings, cache)
                 entry.update(status="pass" if r["status"] == "pass" else "fail", command=command,
                              exit_code=r.get("exit_code"), log=r.get("log"))
                 if r["status"] in ("forbidden", "timeout"):
@@ -278,7 +257,7 @@ def failure_feedback(outcome, scope: dict, commands: list, criteria: list, log_r
     notes = list(scope["problems"])
     seen = set()
     for item in commands + criteria:
-        if item["status"] in ("pass", "indirect", "manual"):
+        if item["status"] in PASSING_CRITERIA:
             continue
         label = f"{item.get('name') or item.get('id')}: {item['status']}"
         if item.get("command"):
@@ -319,7 +298,7 @@ def fresh_artifact_dir(artifacts: Path, ticket_id: str) -> Path:
     return target
 
 
-def commit_ticket(worktree: Path, ticket: dict, run_id: str, settings: Settings) -> str:
+def commit_ticket(worktree: Path, ticket: dict, unit: proj.Unit, run_id: str, settings: Settings) -> str:
     """Commit the index: exactly the builder's changes that check_scope staged.
 
     Files that commands created or changed afterwards (caches, build output,
@@ -327,27 +306,33 @@ def commit_ticket(worktree: Path, ticket: dict, run_id: str, settings: Settings)
     """
     description = " ".join(str(ticket.get("description", "")).split())
     message = (f"{ticket['id']}: {ticket['title']}\n\n{description}\n\n"
-               f"Factory-Ticket: {ticket['id']}\nFactory-Run: {run_id}\n")
+               f"Factory-Ticket: {ticket['id']}\nFactory-Unit: {unit.label}\nFactory-Run: {run_id}\n")
     git(worktree, "-c", f"user.name={settings.commit_name}", "-c", f"user.email={settings.commit_email}",
         "commit", "-q", "-m", message)
     return git(worktree, "rev-parse", "HEAD")
 
 
-def process_ticket(state: dict, entry: dict, batch_dir: Path, project: Project,
+def process_ticket(state: dict, entry: dict, batch_dir: Path, project: proj.Project, unit: proj.Unit,
                    settings: Settings, builder) -> str:
     path = batch_dir / entry["file"]
     if not path.is_file() or sha256(path) != entry["sha256"]:
         raise RunnerError(f"{entry['file']} has changed since validation: start a new run")
-    ticket = dor_check.load_ticket(path)
+    original = dor_check.load_ticket(path)
+    ticket = proj.effective_ticket(original, unit)
     worktree = Path(state["worktree"])
+    unit_dir = unit.repo_dir(worktree)
     art = fresh_artifact_dir(project.artifacts, entry["id"])
     shutil.copy2(path, art / "ticket.yaml")
+    if ticket != original:
+        (art / "ticket.effective.yaml").write_text(
+            "# The ticket as run: unit defaults merged in.\n" + yaml.safe_dump(ticket, sort_keys=False))
     parent = git(worktree, "rev-parse", "HEAD")
     commands_spec = (ticket.get("technical") or {}).get("commands") or {}
     report = {
-        "ticket": entry["id"], "title": ticket.get("title"), "sequence": entry["sequence"],
+        "ticket": entry["id"], "title": ticket.get("title"), "unit": unit.label, "sequence": entry["sequence"],
         "run_id": state["run_id"], "branch": state["branch"], "parent_commit": parent,
-        "builder": builder.name, "status": None, "commit": None, "changed_files": [], "not_committed": [],
+        "builder": builder.describe(), "cost_usd": 0.0, "status": None, "commit": None,
+        "changed_files": [], "not_committed": [],
         "started": now(), "finished": None, "attempts": [],
     }
     print(f"\n{entry['id']} (sequence {entry['sequence']}): {ticket.get('title')}")
@@ -359,64 +344,78 @@ def process_ticket(state: dict, entry: dict, batch_dir: Path, project: Project,
         log_dir.mkdir(parents=True, exist_ok=True)
         attempt = {"attempt": n, "started": now()}
         outcome = builder.build(BuildContext(
-            ticket=ticket, ticket_path=path, worktree=worktree, project_dir=project.dir,
-            fixtures_dir=project.fixtures, attempt=n, log_dir=log_dir, feedback=feedback))
+            ticket=ticket, ticket_path=path, worktree=worktree, unit_dir=unit_dir, project_dir=project.dir,
+            fixtures_dir=project.fixtures, attempt=n, log_dir=log_dir, feedback=feedback,
+            unit=unit, project=project, commands={k: str(v) for k, v in commands_spec.items()}))
         scope = {"status": "skipped", "changed": [], "problems": []}
         commands: list = []
         criteria: list = []
         if outcome.ok:
-            scope = check_scope(ticket, worktree)
+            scope = check_scope(ticket, unit, worktree)
             if scope["status"] == "pass":
                 cache: dict = {}
-                commands = [run_command(name, str(cmd), worktree, log_dir / f"{name}.log", art, settings, cache)
+                commands = [run_command(name, str(cmd), unit_dir, log_dir / f"{name}.log", art, settings, cache)
                             for name, cmd in commands_spec.items()]
-                criteria = check_criteria(ticket, worktree, settings, log_dir, art, cache, commands)
+                criteria = check_criteria(ticket, unit_dir, settings, log_dir, art, cache, commands)
         passed = (outcome.ok and scope["status"] == "pass"
                   and all(c["status"] == "pass" for c in commands)
                   and all(c["status"] in PASSING_CRITERIA for c in criteria))
-        attempt.update(build={"ok": outcome.ok, "message": outcome.message}, scope=scope,
+        cost = outcome.details.get("cost_usd")
+        if isinstance(cost, (int, float)):
+            report["cost_usd"] = round(report["cost_usd"] + cost, 4)
+        attempt.update(build={"ok": outcome.ok, "message": outcome.message, **outcome.details}, scope=scope,
                        commands=commands, criteria=criteria, result="pass" if passed else "fail",
                        finished=now())
         report["attempts"].append(attempt)
         entry["attempts"] = n
         if passed:
-            commit = commit_ticket(worktree, ticket, state["run_id"], settings)
+            commit = commit_ticket(worktree, ticket, unit, state["run_id"], settings)
             (art / "changes.patch").write_text(git(worktree, "diff", "--binary", parent, commit, strip=False))
             entry["commit"] = commit
             status = "awaiting_approval" if entry["approval_required"] else "done"
             leftovers = [line[3:] for line in git(worktree, "status", "--porcelain", "-uall").splitlines()]
             report.update(commit=commit, changed_files=scope["changed"], not_committed=leftovers)
-            print(f"  attempt {n}: pass, committed {commit[:8]}")
+            print(f"  attempt {n}: pass, committed {commit[:8]} ({outcome.message})")
             break
         feedback = failure_feedback(outcome, scope, commands, criteria, art)
         print(f"  attempt {n}: fail: {feedback[0].splitlines()[0] if feedback else 'unknown'}")
-    else:
+        cap = builder.max_cost_per_ticket
+        if cap is not None and report["cost_usd"] >= cap:
+            print(f"  stopping: ${report['cost_usd']:.2f} spent, cap is ${cap:.2f} per ticket")
+            report["stopped"] = f"cost cap ${cap:.2f} reached"
+            break
+    if status == "failed":
         reset_worktree(worktree)
     report.update(status=status, finished=now())
     write_json(art / "report.json", report)
+    entry["cost_usd"] = report["cost_usd"]
     return status
+
+
+def unit_warnings(unit: proj.Unit, worktree: Path) -> list:
+    """Conventions checked once the batch is complete."""
+    unit_dir = unit.repo_dir(worktree)
+    notes = []
+    if unit.packaging == "docker" and not (unit_dir / "Dockerfile").is_file():
+        notes.append(f"{unit.label} has packaging: docker but no Dockerfile in {unit.path or '.'}/")
+    for c in unit.provides:
+        if not (unit_dir / c.path).is_file():
+            notes.append(f"{unit.label} provides contract {c.name}, but {c.path} does not exist yet")
+    return notes
 
 
 # --------------------------------------------------------------- the batch
 
-def save_state(project: Project, state: dict) -> None:
+def save_state(project: proj.Project, state: dict) -> None:
     write_json(project.runs / f"{state['run_id']}.json", state)
 
 
-def ticket_files(batch_dir: Path) -> list:
-    return sorted(p.name for p in batch_dir.iterdir()
-                  if p.is_file() and p.suffix.lower() in dor_check.YAML_SUFFIXES
-                  and not p.name.startswith(("_", ".")))
-
-
-def start_run(batch_dir: Path, project: Project, settings: Settings, builder) -> dict | None:
-    try:
-        git(project.workspace, "rev-parse", "--is-inside-work-tree")
-    except RunnerError:
-        raise RunnerError(f"workspace {project.workspace} is not a git repository") from None
+def start_run(batch_dir: Path, project: proj.Project, unit: proj.Unit, settings: Settings, builder) -> dict | None:
+    if not proj.is_git_repo(project.workspace):
+        raise RunnerError(f"workspace {project.workspace} is not the top of a git repository")
     base_commit = git(project.workspace, "rev-parse", "--verify", f"{project.base_branch}^{{commit}}")
 
-    hashes = {name: sha256(batch_dir / name) for name in ticket_files(batch_dir)}
+    hashes = {p.name: sha256(p) for p in proj.ticket_files(batch_dir)}
     gate = dor_check.check_directory(batch_dir, project.workspace)
     dor_check.print_directory(gate)
     if gate["verdict"] != "READY":
@@ -424,8 +423,8 @@ def start_run(batch_dir: Path, project: Project, settings: Settings, builder) ->
         return None
 
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_id = f"{batch_dir.name}-{stamp}"
-    branch = f"{settings.branch_prefix}/{batch_dir.name}/{stamp}"
+    run_id = f"{unit.name}-{batch_dir.name}-{stamp}"
+    branch = f"{settings.branch_prefix}/{unit.name}/{batch_dir.name}/{stamp}"
     worktree = settings.worktrees / project.name / run_id
     worktree.parent.mkdir(parents=True, exist_ok=True)
     git(project.workspace, "worktree", "add", "-q", "-b", branch, str(worktree), base_commit)
@@ -439,30 +438,33 @@ def start_run(batch_dir: Path, project: Project, settings: Settings, builder) ->
             "status": "pending", "attempts": 0, "commit": None,
         })
     state = {
-        "run_id": run_id, "project": project.name, "batch": str(batch_dir),
+        "run_id": run_id, "project": project.name, "unit": unit.label, "unit_path": unit.path,
+        "unit_yaml_sha256": sha256(unit.source), "batch": str(batch_dir),
         "workspace": str(project.workspace), "base_branch": project.base_branch,
         "base_commit": base_commit, "branch": branch, "worktree": str(worktree),
-        "builder": builder.name, "status": "running", "started": now(), "finished": None,
+        "builder": builder.describe(), "status": "running", "started": now(), "finished": None,
         "gate": {k: gate[k] for k in ("verdict", "ticket_count", "warnings", "skipped")},
-        "tickets": tickets,
+        "warnings": [], "tickets": tickets,
     }
     save_state(project, state)
     print(f"\nRun {run_id}\n  branch   {branch}\n  worktree {worktree}")
     return state
 
 
-def resume_run(run_id: str, batch_dir: Path, project: Project) -> dict:
+def resume_run(run_id: str, batch_dir: Path, project: proj.Project, unit: proj.Unit) -> dict:
     path = project.runs / f"{run_id}.json"
     if not path.is_file():
         raise RunnerError(f"run record {path} not found")
     state = json.loads(path.read_text())
     if Path(state["batch"]) != batch_dir:
         raise RunnerError(f"run {run_id} belongs to {state['batch']}, not {batch_dir}")
-    if ticket_files(batch_dir) != sorted(t["file"] for t in state["tickets"]):
+    if sorted(p.name for p in proj.ticket_files(batch_dir)) != sorted(t["file"] for t in state["tickets"]):
         raise RunnerError("ticket files were added or removed since validation: start a new run")
     for t in state["tickets"]:
         if sha256(batch_dir / t["file"]) != t["sha256"]:
             raise RunnerError(f"{t['file']} has changed since validation: start a new run")
+    if sha256(unit.source) != state["unit_yaml_sha256"]:
+        raise RunnerError(f"{unit.source} has changed since validation: start a new run")
     worktree = Path(state["worktree"])
     if not worktree.is_dir():
         raise RunnerError(f"worktree {worktree} no longer exists: start a new run")
@@ -475,18 +477,31 @@ def resume_run(run_id: str, batch_dir: Path, project: Project) -> dict:
 
 
 def print_summary(state: dict) -> None:
-    print(f"\nRun {state['run_id']}: {state['status']}")
+    print(f"\nRun {state['run_id']} ({state['unit']}): {state['status']}")
     for t in state["tickets"]:
         commit = (t["commit"] or "")[:8]
-        print(f"  {t['sequence']:>4}  {t['id']:<10} {t['status']:<18} attempts {t['attempts']}  {commit}")
+        cost = f"  ${t['cost_usd']:.2f}" if t.get("cost_usd") else ""
+        print(f"  {t['sequence']:>4}  {t['id']:<10} {t['status']:<18} attempts {t['attempts']}  {commit}{cost}")
+    for w in state.get("warnings") or []:
+        print(f"  [warning] {w}")
     print(f"  branch   {state['branch']}")
     print(f"  worktree {state['worktree']}")
     print(f"  review   git -C {shlex.quote(state['workspace'])} log --oneline "
-          f"{state['base_commit'][:8]}..{state['branch']}")
+          f"{state['base_branch']}..{state['branch']}")
 
 
-def process_batch(state: dict, batch_dir: Path, project: Project, settings: Settings,
-                  builder, approvals: set) -> int:
+def pause(state: dict, project: proj.Project, entry: dict) -> int:
+    state["status"] = "paused"
+    save_state(project, state)
+    print_summary(state)
+    print(f"\n{entry['id']} needs human approval. Review commit {(entry['commit'] or '')[:8]}, then run:\n"
+          f"  python core/runner/run_batch.py {shlex.quote(state['batch'])} "
+          f"--resume {state['run_id']} --approve {entry['id']}")
+    return 2
+
+
+def process_batch(state: dict, batch_dir: Path, project: proj.Project, unit: proj.Unit,
+                  settings: Settings, builder, approvals: set) -> int:
     state["status"] = "running"
     try:
         for entry in state["tickets"]:
@@ -499,7 +514,7 @@ def process_batch(state: dict, batch_dir: Path, project: Project, settings: Sett
                 save_state(project, state)
                 print(f"{entry['id']}: approved")
                 continue
-            entry["status"] = process_ticket(state, entry, batch_dir, project, settings, builder)
+            entry["status"] = process_ticket(state, entry, batch_dir, project, unit, settings, builder)
             save_state(project, state)
             if entry["status"] == "failed":
                 state.update(status="failed", finished=now())
@@ -514,20 +529,11 @@ def process_batch(state: dict, batch_dir: Path, project: Project, settings: Sett
         state["status"] = "error"
         save_state(project, state)
         raise
-    state.update(status="completed", finished=now())
+    state.update(status="completed", finished=now(), warnings=unit_warnings(unit, Path(state["worktree"])))
     save_state(project, state)
     print_summary(state)
+    print(f"\nMerge {state['branch']} into {state['base_branch']} to mark these tickets done for other batches.")
     return 0
-
-
-def pause(state: dict, project: Project, entry: dict) -> int:
-    state["status"] = "paused"
-    save_state(project, state)
-    print_summary(state)
-    print(f"\n{entry['id']} needs human approval. Review commit {(entry['commit'] or '')[:8]}, then run:\n"
-          f"  python core/runner/run_batch.py {shlex.quote(state['batch'])} "
-          f"--resume {state['run_id']} --approve {entry['id']}")
-    return 2
 
 
 # -------------------------------------------------------------------- main
@@ -547,28 +553,42 @@ def run(args) -> int:
     batch_dir = args.batch.resolve()
     if not batch_dir.is_dir():
         raise RunnerError(f"{batch_dir} is not a directory")
-    project = load_project(batch_dir)
-    name = args.builder or settings.builder
-    if name not in BUILDERS:
-        raise RunnerError(f"unknown builder {name!r}; available: {', '.join(sorted(BUILDERS))}")
-    builder = BUILDERS[name]
+    try:
+        context = dor_check.find_context(batch_dir)
+    except proj.ProjectError as exc:
+        raise RunnerError(str(exc)) from exc
+    if context is None:
+        raise RunnerError(f"{batch_dir} is not inside a project: expected "
+                          f"projects/<project>/<services|integrations>/<unit>/tickets/<batch>")
+    project, unit = context
+    options = dict(config.get("builder") or {})
+    if args.auth:
+        options["auth"] = args.auth
+    try:
+        builder = make_builder(args.builder or settings.builder, options, settings.strip_env_prefixes)
+        builder.preflight()
+    except BuilderError as exc:
+        raise RunnerError(str(exc)) from exc
+    print(f"Builder: {builder.describe()}")
 
     if args.resume:
-        state = resume_run(args.resume, batch_dir, project)
+        state = resume_run(args.resume, batch_dir, project, unit)
     else:
-        state = start_run(batch_dir, project, settings, builder)
+        state = start_run(batch_dir, project, unit, settings, builder)
         if state is None:
             return 1
-    return process_batch(state, batch_dir, project, settings, builder, set(args.approve))
+    return process_batch(state, batch_dir, project, unit, settings, builder, set(args.approve))
 
 
 def main(argv: list | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("batch", type=Path, help="ticket directory: projects/<project>/tickets/<batch>")
+    parser.add_argument("batch", type=Path, help="projects/<project>/<services|integrations>/<unit>/tickets/<batch>")
     parser.add_argument("--resume", metavar="RUN_ID", help="continue a paused or failed run")
     parser.add_argument("--approve", action="append", default=[], metavar="TICKET_ID",
                         help="approve a ticket awaiting approval (with --resume; repeatable)")
     parser.add_argument("--builder", help=f"override runner.builder ({', '.join(sorted(BUILDERS))})")
+    parser.add_argument("--auth", choices=["subscription", "api_key"],
+                        help="how the claude builder signs in (overrides builder.auth)")
     parser.add_argument("--max-attempts", type=int, help="override runner.max_attempts")
     parser.add_argument("--config", type=Path, help="factory config file (default: config/factory.yaml)")
     args = parser.parse_args(argv)

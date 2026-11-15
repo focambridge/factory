@@ -3,29 +3,37 @@
 
 Checks a single ticket file, or a ticket directory as a batch. It runs the
 mechanical part of the Definition of Ready: schema validation plus content and
-size rules. In directory mode it also counts the tickets and checks that
-sequence numbers and ids are unique and that dependencies respect the
-processing order. Gaps in the sequence are allowed: only uniqueness matters,
-so the order is always definite. Judgement checks belong to a separate reviewer agent or a
-human.
+size rules. In directory mode it also checks that sequence numbers and ids are
+unique and that dependencies respect the processing order. Gaps in the
+sequence are allowed. Judgement checks belong to a reviewer agent or a human.
+
+Inside a project (projects/<project>/<services|integrations>/<unit>/tickets/<batch>)
+the gate also:
+  - merges the unit's technical defaults into each ticket before checking it
+  - checks the project: unit paths, contracts, integrations and stages
+  - requires ticket ids to be unique across the whole project
+  - requires every dependency outside the batch to be merged into the base branch
+  - warns when a ticket touches a contract other units use, and when an
+    earlier stage still has unmerged tickets
+  - checks affected_paths against the unit's folder in the project repository
 
 Usage:
     python dor_check.py TICKET.yaml       [--repo PATH] [--config PATH] [--json]
     python dor_check.py TICKET_DIRECTORY  [--repo PATH] [--config PATH] [--json]
 
-Paths and size limits come from config/factory.yaml in the factory root. Use
---config or the FACTORY_CONFIG environment variable to point at another file.
+--repo overrides the project's workspace as the repository root. Paths and
+limits come from config/factory.yaml in the factory root (or --config, or the
+FACTORY_CONFIG environment variable).
 
-Directory mode reads every *.yaml / *.yml file directly inside the directory
-(not subdirectories). Files whose names start with "_" or "." are skipped and
-reported as skipped.
+Directory mode reads every *.yaml / *.yml file directly inside the directory.
+Files whose names start with "_" or "." are skipped and reported as skipped.
 
 Exit codes, single file:
     0 READY, 1 NEEDS_INFO, 2 DECOMPOSE, 3 ERROR (unreadable or unparsable)
 Exit codes, directory:
     0 every ticket is READY and the batch is consistent: safe to process
     1 at least one ticket is not READY, or the batch has errors: process nothing
-    3 ERROR (path not found)
+    3 ERROR (path not found, bad config)
 """
 from __future__ import annotations
 
@@ -43,12 +51,19 @@ import yaml
 from jsonschema import Draft202012Validator
 
 FACTORY_ROOT = Path(__file__).resolve().parents[2]
+if str(FACTORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(FACTORY_ROOT))
+
+from core import project as proj  # noqa: E402
+
 DEFAULT_CONFIG = FACTORY_ROOT / "config" / "factory.yaml"
-YAML_SUFFIXES = {".yaml", ".yml"}
+YAML_SUFFIXES = proj.YAML_SUFFIXES
 SIZE_ORDER = ["XS", "S", "M", "L", "XL"]
 
 # Set from the config file by apply_config() before any check runs.
 SCHEMA_PATH: Path
+PROJECT_SCHEMA_PATH: Path
+UNIT_SCHEMA_PATH: Path
 MAX_SIZE: str
 MAX_CRITERIA: int
 MAX_AFFECTED_PATHS: int
@@ -70,7 +85,6 @@ VAGUE = re.compile(
     re.IGNORECASE,
 )
 
-GLOB_CHARS = set("*?[")
 
 
 # ---------------------------------------------------------------- helpers
@@ -128,18 +142,18 @@ def load_config(path: Path) -> dict:
     return config
 
 
-def resolve(root: Path, value: str) -> Path:
-    p = Path(value).expanduser()
-    return p if p.is_absolute() else root / p
+resolve = proj.resolve
 
 
 def apply_config(config: dict, root: Path) -> None:
     """Set the module-level paths and limits. Missing keys are an error, not a silent default."""
-    global SCHEMA_PATH, MAX_SIZE, MAX_CRITERIA, MAX_AFFECTED_PATHS, MAX_FILES_ESTIMATE
-    global MAX_COMPONENTS, MAX_INTERFACES
+    global SCHEMA_PATH, PROJECT_SCHEMA_PATH, UNIT_SCHEMA_PATH
+    global MAX_SIZE, MAX_CRITERIA, MAX_AFFECTED_PATHS, MAX_FILES_ESTIMATE, MAX_COMPONENTS, MAX_INTERFACES
     try:
         paths, gate = config["paths"], config["gate"]
         SCHEMA_PATH = resolve(root, paths["schema"])
+        PROJECT_SCHEMA_PATH = resolve(root, paths["project_schema"])
+        UNIT_SCHEMA_PATH = resolve(root, paths["unit_schema"])
         MAX_SIZE = gate["max_size"]
         MAX_CRITERIA = int(gate["max_acceptance_criteria"])
         MAX_AFFECTED_PATHS = int(gate["max_affected_paths"])
@@ -150,14 +164,21 @@ def apply_config(config: dict, root: Path) -> None:
         raise ValueError(f"config is missing or has a malformed key: {exc}") from exc
     if MAX_SIZE not in SIZE_ORDER:
         raise ValueError(f"gate.max_size must be one of {SIZE_ORDER}, not {MAX_SIZE!r}")
-    if not SCHEMA_PATH.is_file():
-        raise ValueError(f"paths.schema does not exist: {SCHEMA_PATH}")
+    for label, p in (("schema", SCHEMA_PATH), ("project_schema", PROJECT_SCHEMA_PATH),
+                     ("unit_schema", UNIT_SCHEMA_PATH)):
+        if not p.is_file():
+            raise ValueError(f"paths.{label} does not exist: {p}")
     validator.cache_clear()
 
 
 @lru_cache(maxsize=1)
 def validator() -> Draft202012Validator:
     return Draft202012Validator(json.loads(SCHEMA_PATH.read_text()))
+
+
+def find_context(directory: Path):
+    """(project, unit) for a batch inside a project, else None. Raises proj.ProjectError."""
+    return proj.find_context(directory, PROJECT_SCHEMA_PATH, UNIT_SCHEMA_PATH)
 
 
 # ------------------------------------------------------- single-ticket checks
@@ -263,6 +284,10 @@ def check_content(ticket: dict, report: Report) -> None:
         report.warnings.append("title contains 'and': may bundle two outcomes")
 
     scope = ticket.get("scope") or {}
+    for key in ("affected_paths", "protected_paths"):
+        for p in scope.get(key) or []:
+            if isinstance(p, str) and proj.escapes(p):
+                report.needs_info.append(f"{key}: {p!r} leaves the unit folder; paths are relative to it")
     overlap = set(map(str, scope.get("affected_paths") or [])) & set(map(str, scope.get("protected_paths") or []))
     for p in sorted(overlap):
         report.needs_info.append(f"path is both affected and protected: {p}")
@@ -308,56 +333,136 @@ def check_technical(ticket: dict, report: Report) -> None:
         report.warnings.append("criteria rely on tests but technical.commands has no 'test' command")
 
 
-def check_repo(ticket: dict, repo: Path, report: Report) -> None:
-    """Every affected path must match a file, or sit in an existing directory (new file)."""
+def check_repo(ticket: dict, root: Path, report: Report) -> None:
+    """Affected paths are checked against the unit's folder in the repository."""
+    if not root.is_dir():
+        report.warnings.append(f"unit folder {root} does not exist in the repository yet; every path is new")
+        return
     for pattern in (ticket.get("scope") or {}).get("affected_paths") or []:
         pattern = str(pattern)
-        if any(repo.glob(pattern.rstrip("/") or ".")):
+        if proj.escapes(pattern) or any(root.glob(pattern.rstrip("/") or ".")):
             continue
-        literal = pattern
-        for i, ch in enumerate(pattern):
-            if ch in GLOB_CHARS:
-                literal = pattern[:i]
-                break
-        parent = (repo / literal).parent if literal else repo
-        if parent.is_dir():
-            report.warnings.append(f"{pattern}: no existing match; assuming a new file")
-        else:
-            report.needs_info.append(f"{pattern}: does not resolve in the repository")
+        report.warnings.append(f"{pattern}: not in the repository yet; assuming it will be created")
 
 
-def check_ticket(ticket: dict, repo: Path | None) -> Report:
+def check_ticket(ticket: dict, repo_root: Path | None) -> Report:
     report = Report()
     check_schema(ticket, report)
     check_size(ticket, report)
     check_content(ticket, report)
     check_technical(ticket, report)
-    if repo:
-        check_repo(ticket, repo, report)
+    if repo_root is not None:
+        check_repo(ticket, repo_root, report)
     return report
 
 
 # ------------------------------------------------------------ batch checks
 
-def check_directory(directory: Path, repo: Path | None) -> dict:
-    candidates = sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in YAML_SUFFIXES)
-    skipped = [p.name for p in candidates if p.name.startswith(("_", "."))]
-    files = [p for p in candidates if not p.name.startswith(("_", "."))]
+def repo_root_for(context, repo: Path | None, warnings: list) -> tuple:
+    """(repo root or None, unit folder in it or None)."""
+    if context is None:
+        return repo, repo
+    project, unit = context
+    if repo is None:
+        if proj.is_git_repo(project.workspace):
+            repo = project.workspace
+        else:
+            warnings.append(f"workspace {project.workspace} is not a git repository yet: "
+                            f"repository and merge checks skipped")
+            return None, None
+    return repo, unit.repo_dir(repo)
 
+
+def check_project_batch(context, repo: Path | None, directory: Path, entries: list,
+                        external: list, errors: list, warnings: list) -> None:
+    project, unit = context
+    p_errors, p_warnings = proj.check_project(project)
+    errors.extend(f"project: {e}" for e in p_errors)
+    warnings.extend(f"project: {w}" for w in p_warnings)
+
+    index = project.ticket_index()
+    here = {(directory / e["file"]).resolve() for e in entries}
+
+    # Ids are unique across the whole project, so dependencies are unambiguous.
+    for e in entries:
+        tid = e["ticket"].get("id")
+        if not isinstance(tid, str):
+            continue
+        for other_unit, f in index.get(tid, []):
+            if f.resolve() not in here:
+                errors.append(f"id {tid} is also used by {f.relative_to(project.dir)}")
+
+    # Dependencies outside the batch must be merged into the base branch.
+    for label, dep in external:
+        owners = index.get(dep, [])
+        if repo is not None:
+            if proj.merged_commit(repo, project.base_branch, dep):
+                continue
+            if not owners:
+                errors.append(f"{label}: blocked_by {dep}: no such ticket in the project "
+                              f"and nothing merged into {project.base_branch}")
+            else:
+                where = owners[0][0].label
+                errors.append(f"{label}: blocked_by {dep} ({where}) is not merged into {project.base_branch}")
+        elif not owners:
+            errors.append(f"{label}: blocked_by {dep}: no such ticket in the project")
+        else:
+            warnings.append(f"{label}: blocked_by {dep} ({owners[0][0].label}): cannot check it is merged "
+                            f"without a workspace")
+
+    # Contracts: a change to one this unit provides affects its consumers.
+    for e in entries:
+        label = e["ticket"].get("id") or e["file"]
+        affected = [str(p) for p in (e["ticket"].get("scope") or {}).get("affected_paths") or []]
+        for c in unit.provides:
+            if any(proj.path_matches(c.path, a) for a in affected):
+                users = project.consumers(unit.name, c.name)
+                if users:
+                    warnings.append(f"{label}: may change contract {c.name} ({c.path}), used by {', '.join(users)}")
+
+    # Stages: earlier stages should be merged before this unit is built.
+    stage = project.stage_index(unit.name)
+    if stage and repo is not None:
+        by_unit = defaultdict(list)
+        for tid, owners in index.items():
+            for owner, _ in owners:
+                by_unit[owner.name].append(tid)
+        for earlier in project.stages[:stage]:
+            for name in earlier:
+                pending = sorted(t for t in by_unit.get(name, [])
+                                 if not proj.merged_commit(repo, project.base_branch, t))
+                if pending:
+                    warnings.append(f"stage {stage + 1} unit, but earlier-stage unit {name} has tickets not "
+                                    f"merged into {project.base_branch}: {', '.join(pending)}")
+
+
+def check_directory(directory: Path, repo: Path | None = None) -> dict:
     errors: list[str] = []
     warnings: list[str] = []
     entries: list[dict] = []
+
+    try:
+        context = find_context(directory)
+    except proj.ProjectError as exc:
+        context = None
+        errors.append(f"project: {exc}")
+    project, unit = context if context else (None, None)
+    repo, unit_root = repo_root_for(context, repo, warnings)
+
+    candidates = sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in YAML_SUFFIXES)
+    skipped = [p.name for p in candidates if p.name.startswith(("_", "."))]
+    files = proj.ticket_files(directory)
 
     if not files:
         errors.append("no ticket files found")
 
     for path in files:
         try:
-            ticket = load_ticket(path)
+            ticket = proj.effective_ticket(load_ticket(path), unit)
         except (OSError, yaml.YAMLError, ValueError) as exc:
             errors.append(f"{path.name}: cannot be read as a ticket: {describe_error(exc)}")
             continue
-        entries.append({"file": path.name, "ticket": ticket, "report": check_ticket(ticket, repo)})
+        entries.append({"file": path.name, "ticket": ticket, "report": check_ticket(ticket, unit_root)})
 
     # Sequence numbers: unique, so the processing order is definite. Gaps are fine.
     by_seq: dict[int, list[str]] = defaultdict(list)
@@ -379,12 +484,13 @@ def check_directory(directory: Path, repo: Path | None) -> dict:
         if len(names) > 1:
             errors.append(f"duplicate id {tid}: {', '.join(names)}")
 
-    # Dependencies must be processed before the tickets that need them.
+    # Dependencies in the batch must be processed before the tickets that need them.
     seq_of: dict[str, int | None] = {}
     for e in entries:
         tid = e["ticket"].get("id")
         if isinstance(tid, str) and tid not in seq_of:
             seq_of[tid] = as_int(e["ticket"].get("sequence"))
+    external: list[tuple[str, str]] = []
     for e in entries:
         t = e["ticket"]
         own = as_int(t.get("sequence"))
@@ -393,12 +499,18 @@ def check_directory(directory: Path, repo: Path | None) -> dict:
             if not isinstance(dep, str):
                 continue
             if dep not in seq_of:
-                warnings.append(f"{label}: blocked_by {dep} is not in this directory; confirm it is done")
+                external.append((label, dep))
             elif own is not None and seq_of[dep] is not None and seq_of[dep] >= own:
                 errors.append(
                     f"{label} (sequence {own}) is blocked by {dep} (sequence {seq_of[dep]}), "
                     f"which is not processed before it"
                 )
+
+    if context:
+        check_project_batch(context, repo, directory, entries, external, errors, warnings)
+    else:
+        for label, dep in external:
+            warnings.append(f"{label}: blocked_by {dep} is not in this directory; confirm it is done")
 
     # Processing order: by sequence; tickets without a usable sequence last.
     entries.sort(key=lambda e: (as_int(e["ticket"].get("sequence")) is None,
@@ -409,6 +521,8 @@ def check_directory(directory: Path, repo: Path | None) -> dict:
 
     return {
         "directory": str(directory),
+        "project": project.name if project else None,
+        "unit": unit.label if unit else None,
         "verdict": "READY" if ready else "NOT_READY",
         "ticket_count": len(files),
         "verdict_counts": dict(sorted(counts.items())),
@@ -429,6 +543,8 @@ def print_ticket(result: dict, indent: str = "") -> None:
 
 def print_directory(result: dict) -> None:
     print(f"{result['directory']}: {result['verdict']}")
+    if result.get("unit"):
+        print(f"  project {result['project']}, unit {result['unit']}")
     seqs = [t["sequence"] for t in result["tickets"] if t["sequence"] is not None]
     span = f", sequence {min(seqs)}-{max(seqs)}" if seqs else ""
     counts = ", ".join(f"{n} {v}" for v, n in result["verdict_counts"].items())
@@ -450,7 +566,7 @@ def print_directory(result: dict) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("path", type=Path, help="a ticket file or a ticket directory")
-    parser.add_argument("--repo", type=Path, help="repository root, to check affected_paths")
+    parser.add_argument("--repo", type=Path, help="repository root (default: the project's workspace)")
     parser.add_argument("--config", type=Path, help="factory config file (default: config/factory.yaml)")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     args = parser.parse_args(argv)
@@ -463,18 +579,26 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: config {config_path}: {describe_error(exc)}", file=sys.stderr)
         return 3
 
+    if not args.path.exists():
+        print(f"ERROR: {args.path} not found", file=sys.stderr)
+        return 3
+
     if args.path.is_dir():
         result = check_directory(args.path, args.repo)
         print(json.dumps(result, indent=2)) if args.json else print_directory(result)
         return 0 if result["verdict"] == "READY" else 1
 
     try:
-        ticket = load_ticket(args.path)
-    except (OSError, yaml.YAMLError, ValueError) as exc:
+        context = find_context(args.path.parent)
+        ticket = proj.effective_ticket(load_ticket(args.path), context[1] if context else None)
+    except (OSError, yaml.YAMLError, ValueError, proj.ProjectError) as exc:
         print(f"ERROR: {describe_error(exc)}", file=sys.stderr)
         return 3
 
-    report = check_ticket(ticket, args.repo)
+    notes: list[str] = []
+    _, unit_root = repo_root_for(context, args.repo, notes)
+    report = check_ticket(ticket, unit_root)
+    report.warnings.extend(notes)
     result = report.as_dict(ticket)
     if args.json:
         print(json.dumps(result, indent=2))

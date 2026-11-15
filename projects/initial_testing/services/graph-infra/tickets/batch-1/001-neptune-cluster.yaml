@@ -20,6 +20,7 @@ scope:
     - A neptune module under infra/modules/neptune
     - Wiring the module into infra/envs/dev
     - A security group that allows port 8182 from the private application subnets only
+    - The graph-endpoint contract describing the endpoint, port and IAM authentication
   out:
     - Production or staging environments
     - Running terraform apply
@@ -28,6 +29,7 @@ scope:
     - infra/modules/neptune/
     - infra/envs/dev/main.tf
     - infra/envs/dev/variables.tf
+    - contracts/graph-endpoint.md
 
 technical:
   stack:

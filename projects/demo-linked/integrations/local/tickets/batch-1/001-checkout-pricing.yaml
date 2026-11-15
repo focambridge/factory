@@ -1,0 +1,52 @@
+schema_version: "1.2"
+id: INT-1
+sequence: 1
+title: Test checkout totals against the real pricing service
+description: >
+  Wire pricing.quote.quote into checkout.basket.total and test the pair end
+  to end.
+type: test
+
+goal:
+  problem: >
+    Each service is tested only on its own, so nothing shows that checkout and
+    pricing agree on the quote contract.
+  outcome: >
+    An integration test totals a real basket with real prices and passes.
+
+scope:
+  in:
+    - A test configuration that makes both services importable
+    - An end-to-end test of checkout with pricing
+  out:
+    - Changes to either service
+  affected_paths:
+    - tests/
+
+technical:
+  interfaces:
+    - kind: module
+      name: integrations.local.tests
+      action: create
+
+acceptance_criteria:
+  - id: AC-1
+    given: apples at 40 pence and pears at 55 pence
+    when: checkout totals 3 apples and 2 pears using pricing's quote
+    then: the total is 230 pence
+    verification:
+      method: new_test
+      reference: tests/test_checkout_pricing.py::test_basket_total
+
+size:
+  estimate: XS
+  rationale: One test module and its configuration.
+  files_estimate: 2
+
+risk:
+  level: low
+
+dependencies:
+  blocked_by: [PRC-1, CHK-1]
+
+open_questions: []

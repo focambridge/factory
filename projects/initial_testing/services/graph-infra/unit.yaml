@@ -1,0 +1,17 @@
+kind: service
+description: Terraform for the Neptune graph database.
+packaging: none
+defaults:
+  stack:
+    - {kind: iac, name: terraform, version: "~> 1.7"}
+    - {kind: library, name: hashicorp/aws, version: "~> 5.0"}
+  target:
+    environment: aws
+    region: eu-west-2
+    account: dev
+contracts:
+  provides:
+    - name: graph-endpoint
+      type: other
+      path: contracts/graph-endpoint.md
+      description: Neptune endpoint, port and authentication method.

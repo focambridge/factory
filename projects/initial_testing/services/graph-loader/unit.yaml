@@ -1,0 +1,12 @@
+kind: service
+description: Loads course data into the graph from local CSV files.
+packaging: none
+defaults:
+  stack:
+    - {kind: language, name: python, version: ">=3.11"}
+    - {kind: tool, name: pytest}
+  target:
+    environment: local
+contracts:
+  uses:
+    - {unit: graph-infra, contract: graph-endpoint}
