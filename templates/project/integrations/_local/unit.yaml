@@ -1,0 +1,15 @@
+# An integration: connects services. Optional.
+# The leading underscore in this folder's name makes the factory ignore it:
+# rename the folder (e.g. to `local`) to use it.
+kind: integration
+description: Runs the services together for end-to-end tests.
+services: [app]            # the services it connects (two or more in practice)
+platform: docker-compose   # none | docker | docker-compose | kubernetes | other
+defaults:
+  stack:
+    - {kind: tool, name: docker-compose}
+    - {kind: tool, name: pytest}
+  target:
+    environment: container
+  commands:
+    test: python -m pytest -q

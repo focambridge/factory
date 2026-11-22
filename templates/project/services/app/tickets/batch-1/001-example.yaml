@@ -1,0 +1,71 @@
+# Ticket. Copy this file for each ticket in the batch (002-short-name.yaml, ...).
+# Replace every TODO: the gate refuses any ticket that still contains one.
+# Paths are relative to the unit folder. stack, target and commands come from
+# unit.yaml defaults unless set here.
+
+schema_version: "1.2"
+id: TODO-1             # stable id, unique across the project, e.g. APP-1
+sequence: 1            # processing order in this batch; gaps are fine
+title: "TODO: imperative, one outcome, 10-80 characters"
+description: >
+  TODO: one or two plain sentences on the work, for a human skimming the batch.
+type: feature          # feature | bug | refactor | chore | test | docs
+
+goal:
+  problem: >
+    TODO: what is wrong or missing today, and for whom (30+ characters).
+  outcome: >
+    TODO: what is true when this is done. Behaviour, not implementation.
+
+scope:
+  in:
+    - "TODO: each piece of work included"
+  out:
+    - "TODO: tempting adjacent work that is NOT included (at least one)"
+  affected_paths:      # files, folders (ending /) or globs this ticket may change
+    - "TODO: e.g. src/items.py"
+    - "TODO: e.g. tests/test_items.py"
+  protected_paths: []  # paths it must not change
+
+technical:
+  interfaces: []       # code surfaces created or changed, e.g.
+                       # - kind: function     # function | method | class | module | cli |
+                       #                      # http_endpoint | event | query | metric | schema
+                       #   name: app.items.list_items
+                       #   signature: "(limit: int) -> list[dict]"
+                       #   action: create     # create | modify | remove
+  components: []       # infrastructure touched, e.g.
+                       # - {type: aws_s3_bucket, name: assets, action: create}  # create | modify | delete | read
+  constraints: []      # e.g. - {category: compatibility, statement: "..."}
+                       # categories: performance, security, compatibility, dependency,
+                       # data, infrastructure, cost, style, other
+
+acceptance_criteria:   # 1-7; each must be observable with concrete values
+  - id: AC-1
+    given: "TODO: starting state"
+    when: "TODO: action or event"
+    then: "TODO: observable result, with concrete values"
+    verification:
+      method: new_test # new_test | existing_test | static_check | manual (manual needs approval)
+      reference: "TODO: e.g. tests/test_items.py::test_list_items"
+
+size:
+  estimate: S          # XS | S | M  (L and XL are refused: split the ticket)
+  rationale: "TODO: why this size"
+  files_estimate: 2
+
+risk:
+  level: low           # low | medium | high (high needs notes and approval)
+  notes: ""
+  human_approval_required: false   # true pauses the batch after this ticket for review
+
+dependencies:
+  blocked_by: []       # ids that must be done first: earlier in this batch,
+                       # or anywhere in the project and merged into main
+
+# reproduction:        # required when type is bug
+#   steps: ["..."]
+#   expected: "..."
+#   actual: "..."
+
+open_questions: []     # must be empty before the ticket is ready

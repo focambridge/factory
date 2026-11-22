@@ -1,0 +1,69 @@
+schema_version: "1.2"
+id: DEMO-2
+sequence: 2
+title: Add a mean function in a new calc.stats module
+description: >
+  Add calc/stats.py with mean(values), built on calc.core.add, with unit tests.
+type: feature
+
+goal:
+  problem: >
+    There is no way to average a list of numbers with the calc package, so
+    callers duplicate the arithmetic.
+  outcome: >
+    calc.stats.mean(values) returns the arithmetic mean and raises ValueError
+    for an empty list.
+
+scope:
+  in:
+    - A calc/stats.py module with a mean function
+    - A unit test module for mean
+  out:
+    - Median, mode or other statistics
+    - Changes to calc/core.py
+  affected_paths:
+    - calc/stats.py
+    - tests/test_stats.py
+  protected_paths:
+    - calc/core.py
+
+technical:
+  interfaces:
+    - kind: module
+      name: calc.stats
+      action: create
+    - kind: function
+      name: calc.stats.mean
+      signature: "(values: list[float]) -> float"
+      action: create
+
+acceptance_criteria:
+  - id: AC-1
+    given: the list [2, 4, 9]
+    when: mean is called on it
+    then: it returns 5.0
+    verification:
+      method: new_test
+      reference: tests/test_stats.py::test_mean
+  - id: AC-2
+    given: an empty list
+    when: mean([]) is called
+    then: it raises ValueError
+    verification:
+      method: new_test
+      reference: tests/test_stats.py::test_mean_empty
+
+size:
+  estimate: XS
+  rationale: One new module with one function and its tests.
+  files_estimate: 2
+
+risk:
+  level: medium
+  notes: Demonstrates the approval checkpoint; a human reviews the commit before the batch continues.
+  human_approval_required: true
+
+dependencies:
+  blocked_by: [DEMO-1]
+
+open_questions: []

@@ -1,6 +1,0 @@
-import sys
-from pathlib import Path
-
-REPO = Path(__file__).resolve().parents[3]
-for service in ("pricing", "checkout"):
-    sys.path.insert(0, str(REPO / "services" / service))

@@ -42,3 +42,12 @@ logs/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Factory console: keep the built web app, ignore its dependencies
+console/web/node_modules/
+!console/web/dist/
+
+# Projects are personal: each person's projects stay on their own machine.
+# The folder itself is kept so the factory has somewhere to put new projects.
+projects/*
+!projects/README.md

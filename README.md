@@ -1,6 +1,45 @@
 # factory
 
-A bespoke software factory for my own uses.
+A software factory driven by tickets. You describe what you want built; the
+factory turns it into small, testable tickets, has Claude Code build them one at
+a time, and checks every ticket with its own tests before it counts. You review
+and merge the result. Everything can be done from a web console.
+
+## Quick start
+
+**You need:** a Mac or Linux machine, `git`, Python 3.10 or later, and
+[Claude Code](https://docs.claude.com/en/docs/claude-code) signed in (run
+`claude` once in Terminal and sign in with your Claude account). Node is not
+needed to use the factory; only the projects it builds may need it.
+
+```
+git clone https://github.com/focambridge/factory.git
+cd factory
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python console/server.py
+```
+
+The console opens at http://localhost:8765. Leave that Terminal window open
+while you use it; Ctrl+C stops it.
+
+The factory starts with no projects. **Make your first one:** click
+**+ New project**, give it a name and describe what you want. Claude drafts the
+project and its tickets (2 to 6 minutes); review, edit or ask for changes, save,
+create its repository, and build it.
+
+**Your projects are yours:** the `projects/` folder is not shared through git,
+so the projects you make stay on your machine.
+
+**Where things go:** each project's code is created in its own git repository
+next to the factory folder (for example `../My_Project`). The factory folder
+keeps the tickets, settings, run records and the evidence for every ticket.
+The console's **How the factory works** page explains everything in detail.
+
+## Factory console
+
+The web interface for everything below: projects, tickets, drafting new projects
+with Claude, building, approving, merging and outputs. See `console/README.md`.
 
 ## Projects, services and integrations
 
@@ -43,11 +82,21 @@ one outside its batch is refused until that one is merged.
 **Stages** (optional) give a build order, e.g. services first, then
 integrations. The gate warns when an earlier stage has unmerged tickets.
 
+## Starting a new project
+
+```
+cp -R templates/project projects/<project-name>
+```
+
+Then follow `projects/<project-name>/README.md`: point `project.yaml` at a git repo,
+name the first unit, and write tickets from the example ticket in its `batch-1`.
+
 ## Layout of the factory
 
 ```
 config/factory.yaml     paths, gate limits, runner settings
 schema/                 ticket, project and unit JSON Schemas; ticket template
+templates/project/      a project to copy for new projects
 core/project.py         project model shared by the gate and the runner
 core/ticket_check/      Definition-of-Ready gate (dor_check.py)
 core/runner/            batch runner (run_batch.py) and builders
@@ -56,9 +105,7 @@ work/                   run worktrees and demo workspaces (git-ignored)
 
 ## Setup
 
-```
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-```
+See Quick start above. The terminal tools below do the same as the console.
 
 The default builder is Claude, through the Claude Code CLI (`claude`). Install it
 (https://docs.claude.com/en/docs/claude-code), then choose how it signs in, per run:
@@ -103,28 +150,16 @@ local `kind-` or `k3d-` cluster context.
 
 ## Demos
 
-**demo**: the smallest shape, one Python service.
+The repository ships no projects. The console's tests include a small demo
+project that builds with the fixture builder, without Claude. To try the
+factory that way, copy it into `projects/`:
 
 ```
-projects/demo/setup_workspace.sh
-.venv/bin/python core/runner/run_batch.py projects/demo/services/calc/tickets/batch-1 --builder fixture
+cp -R console/tests/fixture_project/demo projects/demo
 ```
 
-Leave out `--builder fixture` to have Claude write the code instead of the prepared fixtures.
-
-DEMO-1 fails its first attempt and passes on the retry, DEMO-2 pauses for
-approval, and DEMO-3 builds on both once resumed.
-
-**demo-linked**: two services and an integration.
-
-```
-projects/demo-linked/setup_workspace.sh
-.venv/bin/python core/runner/run_batch.py projects/demo-linked/services/pricing/tickets/batch-1 --builder fixture
-.venv/bin/python core/runner/run_batch.py projects/demo-linked/services/checkout/tickets/batch-1 --builder fixture
-.venv/bin/python core/runner/run_batch.py projects/demo-linked/integrations/local/tickets/batch-1 --builder fixture   # refused: not merged
-# merge the two factory/... branches into main in work/demo-linked-workspace, then:
-.venv/bin/python core/runner/run_batch.py projects/demo-linked/integrations/local/tickets/batch-1 --builder fixture
-```
+Then in the console: open demo, **Create repository**, open `calc / batch-1`,
+choose the **fixture** builder and **Build this batch**.
 
 ## Builders
 

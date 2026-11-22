@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -173,6 +174,8 @@ class ClaudeBuilder:
                if not any(k.startswith(p) for p in self.strip_env_prefixes) and k not in API_KEY_VARS}
         if self.auth == "api_key" and self._key:
             env["ANTHROPIC_API_KEY"] = self._key
+        # Same Python as the runner, so `python -m pytest` works for Claude as it does for the checks.
+        env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
         return env
 
     # ---------------------------------------------------------- prompt

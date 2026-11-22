@@ -1,0 +1,13 @@
+# Factory project. Relative paths resolve against this folder.
+name: my-project                     # usually the same as this folder's name
+description: One line on what this project builds.
+workspace: ~/code/my-project         # the project's git repository (one repo per project)
+base_branch: main
+fixtures: fixtures                   # only used by --builder fixture; can stay as is
+platform: none                       # default for integrations: none | docker | docker-compose | kubernetes | other
+
+# Optional build order. Units in a stage expect earlier stages to be merged.
+# Leave it out for a single unit or when order does not matter.
+# stages:
+#   - [app]
+#   - [local]

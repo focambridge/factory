@@ -7,7 +7,7 @@
   "additionalProperties": false,
   "required": ["name", "workspace"],
   "properties": {
-    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+    "name": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$", "description": "Usually the project folder name."},
     "description": {"type": "string"},
     "workspace": {"type": "string", "minLength": 1, "description": "The project's git repository. Relative paths resolve against the project folder."},
     "base_branch": {"type": "string", "minLength": 1, "default": "main"},

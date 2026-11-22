@@ -96,6 +96,17 @@ def tail(text: str, lines: int = LOG_TAIL_LINES) -> str:
     return "\n".join(text.rstrip().splitlines()[-lines:])
 
 
+def shown(path) -> str:
+    """A path to print in a command: relative to the current directory when inside it."""
+    p = Path(path)
+    try:
+        # abspath, not resolve: a venv's python is a symlink and must stay the venv's.
+        rel = Path(os.path.abspath(p)).relative_to(os.path.abspath(os.getcwd()))
+        return shlex.quote(str(rel) if str(rel) != "." else ".")
+    except ValueError:
+        return shlex.quote(str(p))
+
+
 def git(repo: Path, *args: str, strip: bool = True) -> str:
     proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
     if proc.returncode != 0:
@@ -379,6 +390,12 @@ def process_ticket(state: dict, entry: dict, batch_dir: Path, project: proj.Proj
             break
         feedback = failure_feedback(outcome, scope, commands, criteria, art)
         print(f"  attempt {n}: fail: {feedback[0].splitlines()[0] if feedback else 'unknown'}")
+        if outcome.ok and scope["problems"] == ["the builder changed no files"]:
+            # A builder that changes nothing is saying the ticket cannot be done as written.
+            # Retrying costs money and gets the same answer: stop and hand it back.
+            report["stopped"] = "the builder changed no files: the ticket probably needs changing"
+            print("  stopping: the builder changed no files, so the ticket probably needs changing")
+            break
         cap = builder.max_cost_per_ticket
         if cap is not None and report["cost_usd"] >= cap:
             print(f"  stopping: ${report['cost_usd']:.2f} spent, cap is ${cap:.2f} per ticket")
@@ -386,6 +403,11 @@ def process_ticket(state: dict, entry: dict, batch_dir: Path, project: proj.Proj
             break
     if status == "failed":
         reset_worktree(worktree)
+        summary = str((report["attempts"][-1].get("build") or {}).get("summary") or "").strip()
+        if summary:
+            short = summary if len(summary) <= 1200 else summary[:1200] + " ..."
+            print("\n  The builder's explanation (last attempt):")
+            print("\n".join("    " + line for line in short.splitlines()))
     report.update(status=status, finished=now())
     write_json(art / "report.json", report)
     entry["cost_usd"] = report["cost_usd"]
@@ -422,9 +444,17 @@ def start_run(batch_dir: Path, project: proj.Project, unit: proj.Unit, settings:
         print("\nBatch rejected by the gate: nothing processed.")
         return None
 
-    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_id = f"{unit.name}-{batch_dir.name}-{stamp}"
-    branch = f"{settings.branch_prefix}/{unit.name}/{batch_dir.name}/{stamp}"
+    base_stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp, n = base_stamp, 1
+    while True:  # two runs in the same second must not share a branch
+        run_id = f"{unit.name}-{batch_dir.name}-{stamp}"
+        branch = f"{settings.branch_prefix}/{unit.name}/{batch_dir.name}/{stamp}"
+        taken = subprocess.run(["git", "-C", str(project.workspace), "rev-parse", "--verify", "-q", branch],
+                               capture_output=True).returncode == 0
+        if not taken and not (project.runs / f"{run_id}.json").exists():
+            break
+        n += 1
+        stamp = f"{base_stamp}-{n}"
     worktree = settings.worktrees / project.name / run_id
     worktree.parent.mkdir(parents=True, exist_ok=True)
     git(project.workspace, "worktree", "add", "-q", "-b", branch, str(worktree), base_commit)
@@ -437,6 +467,10 @@ def start_run(batch_dir: Path, project: proj.Project, unit: proj.Unit, settings:
             "approval_required": bool((ticket.get("risk") or {}).get("human_approval_required")),
             "status": "pending", "attempts": 0, "commit": None,
         })
+        merged = proj.merged_commit(project.workspace, project.base_branch, t["ticket"])
+        if merged:
+            # Already in the base branch (an earlier run, merged): nothing to build.
+            tickets[-1].update(status="merged", merged_commit=merged)
     state = {
         "run_id": run_id, "project": project.name, "unit": unit.label, "unit_path": unit.path,
         "unit_yaml_sha256": sha256(unit.source), "batch": str(batch_dir),
@@ -447,6 +481,9 @@ def start_run(batch_dir: Path, project: proj.Project, unit: proj.Unit, settings:
         "warnings": [], "tickets": tickets,
     }
     save_state(project, state)
+    skipped = [t["id"] for t in tickets if t["status"] == "merged"]
+    if skipped:
+        print(f"\nAlready merged into {project.base_branch}, skipped: {', '.join(skipped)}")
     print(f"\nRun {run_id}\n  branch   {branch}\n  worktree {worktree}")
     return state
 
@@ -479,24 +516,29 @@ def resume_run(run_id: str, batch_dir: Path, project: proj.Project, unit: proj.U
 def print_summary(state: dict) -> None:
     print(f"\nRun {state['run_id']} ({state['unit']}): {state['status']}")
     for t in state["tickets"]:
-        commit = (t["commit"] or "")[:8]
+        commit = (t["commit"] or t.get("merged_commit") or "")[:8]
         cost = f"  ${t['cost_usd']:.2f}" if t.get("cost_usd") else ""
         print(f"  {t['sequence']:>4}  {t['id']:<10} {t['status']:<18} attempts {t['attempts']}  {commit}{cost}")
     for w in state.get("warnings") or []:
         print(f"  [warning] {w}")
     print(f"  branch   {state['branch']}")
     print(f"  worktree {state['worktree']}")
-    print(f"  review   git -C {shlex.quote(state['workspace'])} log --oneline "
+    print(f"  commits  git -C {shown(state['workspace'])} log --oneline "
           f"{state['base_branch']}..{state['branch']}")
+    print(f"  changes  git -C {shown(state['workspace'])} diff {state['base_branch']}...{state['branch']}")
 
 
 def pause(state: dict, project: proj.Project, entry: dict) -> int:
     state["status"] = "paused"
     save_state(project, state)
     print_summary(state)
-    print(f"\n{entry['id']} needs human approval. Review commit {(entry['commit'] or '')[:8]}, then run:\n"
-          f"  python core/runner/run_batch.py {shlex.quote(state['batch'])} "
-          f"--resume {state['run_id']} --approve {entry['id']}")
+    art = project.artifacts / entry["id"]
+    print(f"\n{entry['id']} needs human approval. Review what it changed:\n"
+          f"  git -C {shown(state['workspace'])} show {(entry['commit'] or '')[:7]}\n"
+          f"  (the same diff is in {shown(art / 'changes.patch')}; checks are in {shown(art / 'report.json')})\n"
+          f"Then approve and continue:\n"
+          f"  {shown(sys.executable)} {shown(Path(__file__).resolve())} "
+          f"{shown(state['batch'])} --resume {state['run_id']} --approve {entry['id']}")
     return 2
 
 
@@ -505,7 +547,7 @@ def process_batch(state: dict, batch_dir: Path, project: proj.Project, unit: pro
     state["status"] = "running"
     try:
         for entry in state["tickets"]:
-            if entry["status"] == "done":
+            if entry["status"] in ("done", "merged"):
                 continue
             if entry["status"] == "awaiting_approval":
                 if entry["id"] not in approvals:
@@ -521,7 +563,7 @@ def process_batch(state: dict, batch_dir: Path, project: proj.Project, unit: pro
                 save_state(project, state)
                 print_summary(state)
                 print(f"\n{entry['id']} failed {entry['attempts']} attempts; see "
-                      f"{project.artifacts / entry['id'] / 'report.json'}")
+                      f"{shown(project.artifacts / entry['id'] / 'report.json')}")
                 return 1
             if entry["status"] == "awaiting_approval":
                 return pause(state, project, entry)
@@ -532,7 +574,8 @@ def process_batch(state: dict, batch_dir: Path, project: proj.Project, unit: pro
     state.update(status="completed", finished=now(), warnings=unit_warnings(unit, Path(state["worktree"])))
     save_state(project, state)
     print_summary(state)
-    print(f"\nMerge {state['branch']} into {state['base_branch']} to mark these tickets done for other batches.")
+    print(f"\nReview, then merge to mark these tickets done for other batches:\n"
+          f"  git -C {shown(state['workspace'])} merge {state['branch']}")
     return 0
 
 

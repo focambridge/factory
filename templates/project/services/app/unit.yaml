@@ -1,0 +1,52 @@
+# A service: a largely self-contained piece of the project.
+# Its name is this folder's name. Its code lives in the same folder of the
+# repository (services/<name>/) unless `path` says otherwise.
+kind: service
+description: One line on what this service does.
+# path: .                  # only for a single-unit project that uses the repo root
+packaging: none            # none | docker (docker: a Dockerfile is expected in the unit folder)
+
+# Merged into every ticket in this unit, so tickets need not repeat them.
+# A ticket's own values win.
+defaults:
+  stack:
+    - {kind: language, name: python, version: ">=3.11"}
+    - {kind: tool, name: pytest}
+  target:
+    environment: local     # local | container | aws | gcp | azure | on_prem | other
+  commands:                # run from the unit folder to check every ticket
+    test: python -m pytest -q
+    # lint: ruff check .
+
+  # A React front end instead:
+  # stack:
+  #   - {kind: language, name: typescript, version: "~5"}
+  #   - {kind: framework, name: react, version: "^18"}
+  #   - {kind: tool, name: vite}
+  #   - {kind: tool, name: vitest}
+  # commands:
+  #   test: npm test -- --run
+  #   lint: npm run lint
+  #   build: npm run build
+
+  # Terraform instead (keep infrastructure and application code in separate units):
+  # stack:
+  #   - {kind: iac, name: terraform, version: "~> 1.7"}
+  #   - {kind: library, name: hashicorp/aws, version: "~> 5.0"}
+  # target:
+  #   environment: aws
+  #   region: eu-west-2
+  #   account: dev
+  # commands:
+  #   validate: terraform validate
+  #   test: terraform test
+
+  # constraints:           # added to every ticket's constraints
+  #   - {category: dependency, statement: "No new third-party packages without a ticket saying so."}
+
+# Contracts: how this service talks to others. Other units depend only on these.
+# contracts:
+#   provides:
+#     - {name: items-api, type: openapi, path: contracts/items-api.yaml}
+#   uses:
+#     - {unit: other-service, contract: some-contract}
